@@ -84,13 +84,17 @@ def build_rotation_snapshots(
     prices: pd.DataFrame,
     output_dir: Path,
     top_n: int = 10,
+    assets: list[str] | None = None,
+    benchmark: str = BENCHMARK,
+    defensive_asset: str = DEFENSIVE_ASSET,
 ) -> list[Path]:
     """Write latest daily, weekly, and monthly rankings as CSV files."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    requested_assets = assets or all_research_tickers()
     assets = [
         ticker
-        for ticker in all_research_tickers()
-        if ticker in prices and ticker not in {BENCHMARK, DEFENSIVE_ASSET}
+        for ticker in requested_assets
+        if ticker in prices and ticker not in {benchmark, defensive_asset}
     ]
     written: list[Path] = []
 
@@ -103,7 +107,7 @@ def build_rotation_snapshots(
                 frequency=frequency,
                 top_n=top_n,
                 weighting="Equal weight",
-                defensive_asset=DEFENSIVE_ASSET,
+                defensive_asset=defensive_asset,
             ),
         )
         latest = result.scores.iloc[-1].dropna().sort_values(ascending=False)

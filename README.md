@@ -65,6 +65,15 @@ Version 0.3 adds:
 - holding-weight × stock-momentum leadership analysis;
 - an in-app "attention and leading players" workflow.
 
+Version 0.4 adds a Taiwan market system with:
+
+- official TWSE and TPEx company-master ingestion;
+- automatic `.TW` and `.TWO` ticker resolution;
+- official Taiwan industry groups and curated Taiwan themes;
+- Taiwan-listed equity and bond ETF universes;
+- `0050.TW` as the equity benchmark and `00679B.TWO` as the defensive asset;
+- separate U.S. and Taiwan Parquet databases and ranking histories.
+
 SPY is the benchmark. SHY is the defensive asset when the positive-momentum
 filter rejects every sector.
 
@@ -120,13 +129,22 @@ Run the update manually with:
 ```
 
 The first run downloads full history. Later runs retrieve only a short overlap,
-merge it into `data/cache/adjusted-prices.parquet`, and write:
+merge it into two separate databases:
 
 ```text
-data/snapshots/latest-daily-ranking.csv
-data/snapshots/latest-weekly-ranking.csv
-data/snapshots/latest-monthly-ranking.csv
-data/snapshots/YYYY-MM-DD/
+data/databases/us/adjusted-prices.parquet
+data/databases/tw/adjusted-prices.parquet
+```
+
+Market-specific snapshots are written to:
+
+```text
+data/snapshots/us/latest-daily-ranking.csv
+data/snapshots/us/latest-weekly-ranking.csv
+data/snapshots/us/latest-monthly-ranking.csv
+data/snapshots/tw/latest-daily-ranking.csv
+data/snapshots/tw/latest-weekly-ranking.csv
+data/snapshots/tw/latest-monthly-ranking.csv
 ```
 
 The Codex automation created for this project runs at 18:00 America/New_York
@@ -135,7 +153,7 @@ available trading session.
 
 ## Current scope
 
-Version 0.3 focuses on automated multi-frequency rotation and ETF constituent
+Version 0.4 focuses on automated dual-market rotation and ETF constituent
 leadership research. Logical
 future extensions include:
 

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sector-rotation-research"
-version = "0.3.0"
-description = "Automated multi-frequency rotation research with ETF holdings leadership analysis."
+version = "0.4.0"
+description = "Automated U.S. and Taiwan rotation research with separate databases and ETF leadership analysis."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

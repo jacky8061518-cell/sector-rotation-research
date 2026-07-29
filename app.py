@@ -19,6 +19,18 @@ from sector_rotation.strategy import (
     compute_momentum_components,
     run_backtest,
 )
+from sector_rotation.taiwan import (
+    TW_BENCHMARK,
+    TW_DEFENSIVE_ASSET,
+    TW_ETF_GROUPS,
+    TW_THEME_CODES,
+    assets_from_official_industries,
+    assets_from_taiwan_etfs,
+    assets_from_taiwan_themes,
+    custom_taiwan_assets,
+    fetch_taiwan_company_master,
+    official_industry_groups,
+)
 from sector_rotation.universe import (
     UNIVERSE_GROUPS,
     AssetInfo,
@@ -87,6 +99,11 @@ def load_top_holdings(etfs: tuple[str, ...]) -> pd.DataFrame:
     return fetch_top_holdings(list(etfs))
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_taiwan_company_master() -> pd.DataFrame:
+    return fetch_taiwan_company_master()
+
+
 def parse_tickers(raw: str) -> list[str]:
     return [
         token.upper()
@@ -103,9 +120,16 @@ def format_number(value: float) -> str:
     return "—" if pd.isna(value) else f"{value:.2f}"
 
 
-def performance_chart(strategy: pd.Series, benchmark: pd.Series) -> go.Figure:
+def performance_chart(
+    strategy: pd.Series,
+    benchmark: pd.Series,
+    benchmark_label: str,
+) -> go.Figure:
     frame = pd.concat(
-        [equity_curve(strategy).rename("Strategy"), equity_curve(benchmark).rename(BENCHMARK)],
+        [
+            equity_curve(strategy).rename("Strategy"),
+            equity_curve(benchmark).rename(benchmark_label),
+        ],
         axis=1,
     ).dropna(how="all")
     figure = px.line(
@@ -117,12 +141,17 @@ def performance_chart(strategy: pd.Series, benchmark: pd.Series) -> go.Figure:
     return figure
 
 
-def allocation_chart(weights: pd.DataFrame, metadata: dict[str, AssetInfo]) -> go.Figure:
+def allocation_chart(
+    weights: pd.DataFrame,
+    metadata: dict[str, AssetInfo],
+    defensive_ticker: str,
+    defensive_label: str,
+) -> go.Figure:
     visible = weights.loc[:, (weights.abs().sum() > 0)]
     renamed = visible.rename(
         columns={
             **{ticker: f"{ticker} · {info.name}" for ticker, info in metadata.items()},
-            DEFENSIVE_ASSET: "SHY · Defensive",
+            defensive_ticker: defensive_label,
         }
     )
     figure = px.area(
@@ -134,13 +163,21 @@ def allocation_chart(weights: pd.DataFrame, metadata: dict[str, AssetInfo]) -> g
     return figure
 
 
-st.title("Multi-Layer Rotation Research Lab")
+st.title("U.S. & Taiwan Multi-Layer Rotation Lab")
 st.caption(
-    "每日／每週／每月動能輪動｜大產業、細分產業、結構性主題、風格資產與主題股票籃子"
+    "美股＋台股雙資料庫｜每日／每週／每月動能｜產業、主題、ETF與主要玩家"
 )
 
 with st.sidebar:
     st.header("研究範圍")
+    market = st.segmented_control(
+        "市場資料庫",
+        ["美股", "台股"],
+        default="美股",
+    )
+    if market is None:
+        market = "美股"
+
     data_mode = st.radio(
         "資料來源",
         ["Live Yahoo Finance", "Offline demo"],
@@ -148,33 +185,90 @@ with st.sidebar:
         help="Offline demo 使用合成資料，只能測試功能。",
     )
 
-    universe_options = [*UNIVERSE_GROUPS, "Custom tickers — 自訂"]
-    universe_name = st.selectbox(
-        "研究層級",
-        universe_options,
-        index=1,
-    )
+    if market == "美股":
+        benchmark_ticker = BENCHMARK
+        benchmark_label = "SPY"
+        defensive_ticker = DEFENSIVE_ASSET
+        defensive_label = "SHY · Defensive"
+        universe_options = [*UNIVERSE_GROUPS, "Custom tickers — 自訂"]
+        universe_name = st.selectbox("研究層級", universe_options, index=1)
+        is_etf_universe = "ETFs" in universe_name
 
-    if universe_name == "Custom tickers — 自訂":
-        custom_input = st.text_area(
-            "輸入 ticker",
-            value="NVDA AMD AVGO MSFT AMZN GOOGL",
-            help="用空格、逗號或分號分隔。",
-        )
-        metadata = custom_assets(parse_tickers(custom_input))
-        selected_groups = ["Custom"]
-    else:
-        group_options = groups_for(universe_name)
-        if universe_name in {"Broad sectors — ETFs", "Detailed industries — ETFs"}:
-            default_groups = group_options
+        if universe_name == "Custom tickers — 自訂":
+            custom_input = st.text_area(
+                "輸入 ticker",
+                value="NVDA AMD AVGO MSFT AMZN GOOGL",
+                help="用空格、逗號或分號分隔。",
+            )
+            metadata = custom_assets(parse_tickers(custom_input))
+            selected_groups = ["Custom"]
         else:
-            default_groups = group_options[:3]
-        selected_groups = st.multiselect(
-            "產業／主題分類",
-            group_options,
-            default=default_groups,
-        )
-        metadata = assets_for(universe_name, selected_groups)
+            group_options = groups_for(universe_name)
+            if universe_name in {"Broad sectors — ETFs", "Detailed industries — ETFs"}:
+                default_groups = group_options
+            else:
+                default_groups = group_options[:3]
+            selected_groups = st.multiselect(
+                "產業／主題分類",
+                group_options,
+                default=default_groups,
+            )
+            metadata = assets_for(universe_name, selected_groups)
+    else:
+        benchmark_ticker = TW_BENCHMARK
+        benchmark_label = "0050 · 台灣50"
+        defensive_ticker = TW_DEFENSIVE_ASSET
+        defensive_label = "00679B · 20年美債"
+        taiwan_master = load_taiwan_company_master()
+        universe_options = [
+            "台股官方產業分類",
+            "台股主題股票籃子",
+            "台股 ETFs",
+            "自訂台股代號",
+        ]
+        universe_name = st.selectbox("研究層級", universe_options, index=1)
+        is_etf_universe = universe_name == "台股 ETFs"
+
+        if universe_name == "台股官方產業分類":
+            group_options = official_industry_groups(taiwan_master)
+            preferred = ["半導體業", "電腦及週邊設備", "電子零組件"]
+            selected_groups = st.multiselect(
+                "官方產業分類",
+                group_options,
+                default=[group for group in preferred if group in group_options],
+                help="每個產業依已發行股數保留前60家公司，避免一次下載過大。",
+            )
+            metadata = assets_from_official_industries(
+                taiwan_master,
+                selected_groups,
+            )
+        elif universe_name == "台股主題股票籃子":
+            group_options = list(TW_THEME_CODES)
+            selected_groups = st.multiselect(
+                "台股主題",
+                group_options,
+                default=group_options[:5],
+            )
+            metadata = assets_from_taiwan_themes(taiwan_master, selected_groups)
+        elif universe_name == "台股 ETFs":
+            group_options = list(TW_ETF_GROUPS)
+            selected_groups = st.multiselect(
+                "ETF類型",
+                group_options,
+                default=group_options[:4],
+            )
+            metadata = assets_from_taiwan_etfs(selected_groups)
+        else:
+            custom_input = st.text_area(
+                "輸入台股代號",
+                value="2330 2454 2317 2308 3711",
+                help="直接輸入四位數代號，系統會自動判斷上市.TW或上櫃.TWO。",
+            )
+            metadata = custom_taiwan_assets(
+                parse_tickers(custom_input),
+                taiwan_master,
+            )
+            selected_groups = ["自訂台股"]
 
     frequency = st.segmented_control(
         "訊號與再平衡頻率",
@@ -208,7 +302,10 @@ with st.sidebar:
     )
     risk_adjusted = st.toggle("使用風險調整動能", value=False)
     positive_filter = st.toggle("只持有正動能標的", value=True)
-    use_defensive = st.toggle(f"無合格標的時持有 {DEFENSIVE_ASSET}", value=True)
+    use_defensive = st.toggle(
+        f"無合格標的時持有 {defensive_ticker}",
+        value=True,
+    )
     cost_bps = st.number_input(
         "每次換手成本（bps）",
         min_value=0.0,
@@ -236,7 +333,9 @@ if sum(lookback_weights.values()) == 0:
     st.stop()
 
 asset_tickers = list(metadata)
-download_tickers = tuple(dict.fromkeys([*asset_tickers, BENCHMARK, DEFENSIVE_ASSET]))
+download_tickers = tuple(
+    dict.fromkeys([*asset_tickers, benchmark_ticker, defensive_ticker])
+)
 
 try:
     with st.spinner(
@@ -264,7 +363,7 @@ try:
             weighting=weighting,
             require_positive_momentum=positive_filter,
             risk_adjusted_score=risk_adjusted,
-            defensive_asset=DEFENSIVE_ASSET if use_defensive else None,
+            defensive_asset=defensive_ticker if use_defensive else None,
             transaction_cost_bps=cost_bps,
             volatility_window=frequency_settings["volatility_window"],
         )
@@ -279,7 +378,11 @@ if result.net_returns.empty or result.scores.empty:
     st.stop()
 
 periods_per_year = PERIODS_PER_YEAR[frequency]
-benchmark = benchmark_returns(result.sampled_prices, BENCHMARK, result.net_returns.index[0])
+benchmark = benchmark_returns(
+    result.sampled_prices,
+    benchmark_ticker,
+    result.net_returns.index[0],
+)
 strategy_metrics = performance_summary(result.net_returns, periods_per_year)
 benchmark_metrics = performance_summary(benchmark, periods_per_year)
 latest_signal_date = result.scores.index[-1]
@@ -313,11 +416,12 @@ ranking.index = range(1, len(ranking) + 1)
 if data_mode == "Offline demo":
     st.warning("Offline demo 使用合成資料，不是歷史投資績效。")
 
-coverage_columns = st.columns(4)
-coverage_columns[0].metric("研究標的", len(available_assets))
-coverage_columns[1].metric("分類數量", len({metadata[ticker].group for ticker in available_assets}))
-coverage_columns[2].metric("頻率", frequency_settings["label"])
-coverage_columns[3].metric("資料截止", f"{result.sampled_prices.index[-1]:%Y-%m-%d}")
+coverage_columns = st.columns(5)
+coverage_columns[0].metric("市場資料庫", market)
+coverage_columns[1].metric("研究標的", len(available_assets))
+coverage_columns[2].metric("分類數量", len({metadata[ticker].group for ticker in available_assets}))
+coverage_columns[3].metric("頻率", frequency_settings["label"])
+coverage_columns[4].metric("資料截止", f"{result.sampled_prices.index[-1]:%Y-%m-%d}")
 
 st.subheader("最新模型訊號")
 st.caption(
@@ -351,13 +455,16 @@ with tab_overview:
         f"{result.turnover.mean() * periods_per_year:.1f}x",
     )
 
-    st.plotly_chart(performance_chart(result.net_returns, benchmark), width="stretch")
+    st.plotly_chart(
+        performance_chart(result.net_returns, benchmark, benchmark_label),
+        width="stretch",
+    )
     left, right = st.columns([2, 1])
     with left:
         drawdowns = pd.concat(
             [
                 drawdown(result.net_returns).rename("Strategy"),
-                drawdown(benchmark).rename(BENCHMARK),
+                drawdown(benchmark).rename(benchmark_label),
             ],
             axis=1,
         )
@@ -371,7 +478,7 @@ with tab_overview:
         st.plotly_chart(drawdown_figure, width="stretch")
     with right:
         comparison = pd.DataFrame(
-            {"Strategy": strategy_metrics, BENCHMARK: benchmark_metrics}
+            {"Strategy": strategy_metrics, benchmark_label: benchmark_metrics}
         ).astype(object)
         for row in ["CAGR", "Volatility", "Max drawdown", "Win rate"]:
             comparison.loc[row] = comparison.loc[row].map(format_percent)
@@ -420,10 +527,9 @@ with tab_attention:
         height=420,
     )
 
-    etf_universe = "ETFs" in universe_name
     if data_mode != "Live Yahoo Finance":
         st.info("切換到 Live Yahoo Finance 才能讀取 ETF 最新主要持股。")
-    elif not etf_universe:
+    elif not is_etf_universe:
         st.info(
             "目前選擇的是股票籃子；上表本身就是該主題的股票關注清單。"
             "切換到 ETF 研究層級可繼續拆解 ETF 主要持股。"
@@ -589,14 +695,19 @@ with tab_groups:
 
 with tab_portfolio:
     st.plotly_chart(
-        allocation_chart(result.deployed_weights, metadata),
+        allocation_chart(
+            result.deployed_weights,
+            metadata,
+            defensive_ticker,
+            defensive_label,
+        ),
         width="stretch",
     )
     recent_rows = {"Daily": 30, "Weekly": 26, "Monthly": 12}[frequency]
     recent = result.deployed_weights.tail(recent_rows).rename(
         columns={
             **{ticker: f"{ticker} · {metadata[ticker].name}" for ticker in available_assets},
-            DEFENSIVE_ASSET: "SHY · Defensive",
+            defensive_ticker: defensive_label,
         }
     )
     recent = recent.loc[:, (recent.abs().sum() > 0)]
@@ -613,6 +724,7 @@ with tab_method:
         f"""
         ### 本次研究設定
 
+        - 市場資料庫：**{market}**
         - 研究層級：**{universe_name}**
         - 分類：**{", ".join(selected_groups)}**
         - 訊號與再平衡：**{frequency_settings["label"]}**
@@ -621,7 +733,7 @@ with tab_method:
         - 配置方法：**{weighting}**
         - 風險調整：**{"開啟" if risk_adjusted else "關閉"}**
         - 正動能過濾：**{"開啟" if positive_filter else "關閉"}**
-        - 防禦資產：**{DEFENSIVE_ASSET if use_defensive else "現金"}**
+        - 防禦資產：**{defensive_ticker if use_defensive else "現金"}**
         - 換手成本：**{cost_bps:.0f} bps**
 
         ### 計算流程

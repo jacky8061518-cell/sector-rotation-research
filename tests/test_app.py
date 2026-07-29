@@ -9,7 +9,7 @@ def test_app_renders_with_offline_data():
     app.run()
 
     assert not app.exception
-    assert app.title[0].value == "Multi-Layer Rotation Research Lab"
+    assert app.title[0].value == "U.S. & Taiwan Multi-Layer Rotation Lab"
     assert any("最新模型訊號" in item.value for item in app.subheader)
     assert len(app.metric) >= 9
     del os.environ["SECTOR_ROTATION_TEST_MODE"]
