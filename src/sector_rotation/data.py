@@ -14,6 +14,7 @@ def download_adjusted_prices(
     tickers: list[str],
     start: date,
     end: date,
+    min_observations: int = 30,
 ) -> pd.DataFrame:
     """Download adjusted daily closing prices from Yahoo Finance.
 
@@ -77,7 +78,9 @@ def download_adjusted_prices(
 
     prices = prices.reindex(columns=tickers)
     prices = prices.dropna(how="all").ffill()
-    usable = prices.columns[prices.notna().sum() >= 30]
+    if min_observations <= 0:
+        raise ValueError("min_observations must be positive.")
+    usable = prices.columns[prices.notna().sum() >= min_observations]
     prices = prices.loc[:, usable]
     if prices.empty:
         raise RuntimeError("No ticker has enough usable observations.")

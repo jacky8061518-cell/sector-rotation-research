@@ -56,6 +56,15 @@ Version 0.2 includes:
   EVs, metabolic health, FinTech, and computational biology;
 - user-entered custom tickers.
 
+Version 0.3 adds:
+
+- an incremental Parquet market-data cache;
+- dated daily, weekly, and monthly ranking snapshots;
+- scheduled weekday updates after the U.S. close;
+- ETF top-holdings retrieval;
+- holding-weight × stock-momentum leadership analysis;
+- an in-app "attention and leading players" workflow.
+
 SPY is the benchmark. SHY is the defensive asset when the positive-momentum
 filter rejects every sector.
 
@@ -89,15 +98,45 @@ pytest
 ├── src/sector_rotation/
 │   ├── config.py
 │   ├── data.py
+│   ├── holdings.py
 │   ├── metrics.py
+│   ├── snapshots.py
 │   └── strategy.py
+├── scripts/
+│   └── daily_update.py
 └── tests/
+    ├── test_app.py
+    ├── test_holdings.py
+    ├── test_snapshots.py
     └── test_strategy.py
 ```
 
+## Automated daily update
+
+Run the update manually with:
+
+```bash
+.venv/bin/python scripts/daily_update.py
+```
+
+The first run downloads full history. Later runs retrieve only a short overlap,
+merge it into `data/cache/adjusted-prices.parquet`, and write:
+
+```text
+data/snapshots/latest-daily-ranking.csv
+data/snapshots/latest-weekly-ranking.csv
+data/snapshots/latest-monthly-ranking.csv
+data/snapshots/YYYY-MM-DD/
+```
+
+The Codex automation created for this project runs at 18:00 America/New_York
+on weekdays. Weekend and exchange-holiday runs simply retain the most recent
+available trading session.
+
 ## Current scope
 
-Version 0.2 focuses on transparent multi-frequency rotation research. Logical
+Version 0.3 focuses on automated multi-frequency rotation and ETF constituent
+leadership research. Logical
 future extensions include:
 
 1. walk-forward parameter testing;

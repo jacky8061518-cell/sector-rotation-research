@@ -11,6 +11,7 @@ import streamlit as st
 
 from sector_rotation.config import BENCHMARK, DEFENSIVE_ASSET
 from sector_rotation.data import download_adjusted_prices, generate_demo_prices
+from sector_rotation.holdings import analyze_holding_leadership, fetch_top_holdings
 from sector_rotation.metrics import benchmark_returns, drawdown, equity_curve, performance_summary
 from sector_rotation.strategy import (
     PERIODS_PER_YEAR,
@@ -79,6 +80,11 @@ def load_live_data(tickers: tuple[str, ...], start: date, end: date) -> pd.DataF
 @st.cache_data(show_spinner=False)
 def load_demo_data(tickers: tuple[str, ...]) -> pd.DataFrame:
     return generate_demo_prices(tickers=list(tickers))
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_top_holdings(etfs: tuple[str, ...]) -> pd.DataFrame:
+    return fetch_top_holdings(list(etfs))
 
 
 def parse_tickers(raw: str) -> list[str]:
@@ -330,8 +336,8 @@ else:
         label = info.name if info else "Defensive asset"
         cards[number % card_count].metric(ticker, f"{weight:.1%}", label)
 
-tab_overview, tab_rankings, tab_groups, tab_portfolio, tab_method = st.tabs(
-    ["績效", "詳細排名", "分類比較", "配置歷史", "方法與限制"]
+tab_overview, tab_attention, tab_rankings, tab_groups, tab_portfolio, tab_method = st.tabs(
+    ["績效", "關注與主要玩家", "詳細排名", "分類比較", "配置歷史", "方法與限制"]
 )
 
 with tab_overview:
@@ -371,6 +377,149 @@ with tab_overview:
             comparison.loc[row] = comparison.loc[row].map(format_percent)
         comparison.loc["Sharpe"] = comparison.loc["Sharpe"].map(format_number)
         st.dataframe(comparison, width="stretch")
+
+with tab_attention:
+    st.subheader("目前優先關注方向")
+    st.caption(
+        "先用分類平均動能找資金主線，再由領先 ETF 的主要持股找出值得深入研究的公司。"
+    )
+
+    attention_groups = (
+        ranking.groupby("Group", as_index=False)
+        .agg(
+            Average_score=("Momentum score", "mean"),
+            Best_asset_score=("Momentum score", "max"),
+            Positive_assets=("Momentum score", lambda values: int((values > 0).sum())),
+            Asset_count=("Ticker", "count"),
+        )
+        .sort_values("Average_score", ascending=False)
+    )
+    group_cards = st.columns(min(3, len(attention_groups)))
+    for position, row in attention_groups.head(3).reset_index(drop=True).iterrows():
+        group_cards[position].metric(
+            f"#{position + 1} {row['Group']}",
+            f"{row['Average_score']:.3f}",
+            f"{int(row['Positive_assets'])}/{int(row['Asset_count'])} positive",
+        )
+
+    st.markdown("#### 領先 ETF／股票")
+    attention_assets = ranking.head(15).copy()
+    st.dataframe(
+        attention_assets.style.format(
+            {
+                "Momentum score": "{:.3f}",
+                "Target weight": "{:.1%}",
+                **{
+                    column: "{:.1%}"
+                    for column in attention_assets
+                    if column.endswith(f"{frequency_settings['unit']} return")
+                },
+            }
+        ),
+        width="stretch",
+        height=420,
+    )
+
+    etf_universe = "ETFs" in universe_name
+    if data_mode != "Live Yahoo Finance":
+        st.info("切換到 Live Yahoo Finance 才能讀取 ETF 最新主要持股。")
+    elif not etf_universe:
+        st.info(
+            "目前選擇的是股票籃子；上表本身就是該主題的股票關注清單。"
+            "切換到 ETF 研究層級可繼續拆解 ETF 主要持股。"
+        )
+    else:
+        candidate_etfs = list(latest_scores.head(10).index)
+        selected_etfs = st.multiselect(
+            "拆解哪些領先 ETF",
+            candidate_etfs,
+            default=candidate_etfs[: min(3, len(candidate_etfs))],
+            help="持股資料快取 24 小時；基金持股可能隨時變動。",
+        )
+        if selected_etfs:
+            with st.spinner("正在讀取 ETF 主要持股並計算股票領先度…"):
+                holdings = load_top_holdings(tuple(selected_etfs))
+                if holdings.empty:
+                    leadership = pd.DataFrame()
+                else:
+                    holding_tickers = tuple(holdings["Holding ticker"].unique())
+                    holding_prices = load_live_data(
+                        holding_tickers,
+                        date.today() - timedelta(days=400),
+                        date.today() + timedelta(days=1),
+                    )
+                    leadership = analyze_holding_leadership(holdings, holding_prices)
+
+            if leadership.empty:
+                st.warning("Yahoo Finance 暫時沒有回傳所選 ETF 的可用持股資料。")
+            else:
+                leadership["ETF momentum score"] = leadership["ETF"].map(
+                    latest_scores.to_dict()
+                )
+                leadership["ETF group"] = leadership["ETF"].map(
+                    {ticker: metadata[ticker].group for ticker in selected_etfs}
+                )
+                leadership = leadership.sort_values(
+                    ["ETF momentum score", "ETF", "ETF rank"],
+                    ascending=[False, True, True],
+                )
+
+                st.markdown("#### ETF 中的主要帶領玩家")
+                leader_display = leadership[
+                    [
+                        "ETF",
+                        "ETF group",
+                        "Holding ticker",
+                        "Holding name",
+                        "Holding weight",
+                        "21d return",
+                        "63d return",
+                        "126d return",
+                        "Stock momentum",
+                        "Leadership score",
+                        "ETF rank",
+                    ]
+                ]
+                st.dataframe(
+                    leader_display.style.format(
+                        {
+                            "Holding weight": "{:.1%}",
+                            "21d return": "{:.1%}",
+                            "63d return": "{:.1%}",
+                            "126d return": "{:.1%}",
+                            "Stock momentum": "{:.1%}",
+                            "Leadership score": "{:.4f}",
+                        }
+                    ),
+                    width="stretch",
+                    height=560,
+                )
+
+                chart_data = leadership.copy()
+                chart_data["Player"] = (
+                    chart_data["Holding ticker"] + " · " + chart_data["Holding name"]
+                )
+                leader_chart = px.bar(
+                    chart_data,
+                    x="Leadership score",
+                    y="Player",
+                    color="ETF",
+                    facet_col="ETF",
+                    facet_col_wrap=min(3, len(selected_etfs)),
+                    orientation="h",
+                    title="持股權重 × 股票多週期動能（研究優先度代理值）",
+                )
+                leader_chart.update_layout(
+                    height=max(480, int(len(chart_data) / max(1, len(selected_etfs))) * 35)
+                )
+                st.plotly_chart(leader_chart, width="stretch")
+
+                st.download_button(
+                    "下載 ETF 主要玩家 CSV",
+                    data=leader_display.to_csv(index=False).encode("utf-8"),
+                    file_name=f"etf-leading-players-{latest_signal_date:%Y-%m-%d}.csv",
+                    mime="text/csv",
+                )
 
 with tab_rankings:
     return_columns = [

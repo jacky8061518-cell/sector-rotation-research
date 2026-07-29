@@ -9,3 +9,5 @@ venv/
 build/
 dist/
 .streamlit/secrets.toml
+data/cache/
+data/snapshots/

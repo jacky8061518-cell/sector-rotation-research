@@ -83,7 +83,7 @@ UNIVERSE_GROUPS: dict[str, dict[str, dict[str, str]]] = {
             "AIQ": "Artificial intelligence and technology",
             "BOTZ": "Robotics and artificial intelligence",
             "ROBO": "Robotics and automation",
-            "IRBO": "Robotics and AI",
+            "ARTY": "Future AI and technology",
             "QTUM": "Quantum computing and machine learning",
         },
         "Cloud and cybersecurity": {
