@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sector-rotation-research"
-version = "0.1.0"
-description = "An explainable Streamlit research lab for momentum-based U.S. sector rotation."
+version = "0.2.0"
+description = "A multi-frequency Streamlit lab for sector, industry, theme, style, and stock rotation."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

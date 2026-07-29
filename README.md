@@ -1,16 +1,18 @@
-# Sector Rotation Research Lab
+# Multi-Layer Rotation Research Lab
 
-An explainable, parameter-driven Streamlit application for researching monthly
-momentum rotation across U.S. sector ETFs.
+An explainable, parameter-driven Streamlit application for researching daily,
+weekly, and monthly momentum rotation across sectors, detailed industries,
+structural themes, investment styles, and curated thematic stock baskets.
 
 The project is designed for stock researchers who want to identify sector
 leadership before moving into individual-company analysis.
 
 ## What the application answers
 
-- Which U.S. sectors currently have the strongest composite momentum?
+- Which sectors, industries, themes, styles, or stocks currently have the
+  strongest composite momentum?
 - How does the ranking change when momentum is adjusted for volatility?
-- What would a monthly top-N sector portfolio have held historically?
+- What would a daily, weekly, or monthly top-N portfolio have held historically?
 - Does the strategy remain useful after explicit turnover costs?
 - How do its return, volatility, Sharpe ratio, and drawdown compare with SPY?
 
@@ -19,9 +21,9 @@ leadership before moving into individual-company analysis.
 ```text
 Adjusted ETF prices
         ↓
-Calendar month-end observations
+Daily / weekly / monthly observations
         ↓
-1 / 3 / 6 / 12-month momentum
+Frequency-specific multi-horizon momentum
         ↓
 Composite or risk-adjusted score
         ↓
@@ -34,27 +36,25 @@ One-month signal shift
 Cost-aware backtest and research dashboard
 ```
 
-The one-month shift is deliberate: a ranking observed at month-end is applied
-to the following month. This prevents the backtest from earning a return before
-the signal was known.
+The one-period shift is deliberate: a ranking observed at the end of a day,
+week, or month is applied to the following period. This prevents the backtest
+from earning a return before the signal was known.
 
-## Universe
+## Research universes
 
-The default research universe contains the 11 U.S. Select Sector SPDR ETFs:
+Version 0.2 includes:
 
-| ETF | Sector |
-|---|---|
-| XLB | Materials |
-| XLC | Communication Services |
-| XLE | Energy |
-| XLF | Financials |
-| XLI | Industrials |
-| XLK | Technology |
-| XLP | Consumer Staples |
-| XLRE | Real Estate |
-| XLU | Utilities |
-| XLV | Health Care |
-| XLY | Consumer Discretionary |
+- all 11 U.S. Select Sector SPDR ETFs;
+- detailed technology, financial, health-care, industrial, consumer, energy,
+  mining, real-estate, and infrastructure industry ETFs;
+- AI, robotics, cloud, cybersecurity, clean-energy, nuclear, EV, space,
+  genomics, FinTech, blockchain, digital-consumer, and sustainability themes;
+- growth, value, dividend, quality, low-volatility, size, international,
+  real-asset, and rates ETFs;
+- curated stock baskets for AI compute, cloud software, cybersecurity,
+  semiconductor equipment, data-center power, nuclear, space and defense,
+  EVs, metabolic health, FinTech, and computational biology;
+- user-entered custom tickers.
 
 SPY is the benchmark. SHY is the defensive asset when the positive-momentum
 filter rejects every sector.
@@ -97,13 +97,13 @@ pytest
 
 ## Current scope
 
-Version 0.1 focuses on a transparent monthly ETF rotation model. Logical future
-extensions include:
+Version 0.2 focuses on transparent multi-frequency rotation research. Logical
+future extensions include:
 
 1. walk-forward parameter testing;
 2. subperiod and market-regime analysis;
 3. bootstrap confidence intervals;
-4. individual-stock factor ranking inside selected sectors;
+4. fundamental and quality factors inside selected sectors;
 5. downloadable research reports and target allocations.
 
 ## Important limitations

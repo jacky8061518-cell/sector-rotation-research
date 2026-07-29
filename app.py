@@ -1,25 +1,56 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import os
+import re
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from sector_rotation.config import (
-    BENCHMARK,
-    DEFAULT_LOOKBACK_WEIGHTS,
-    DEFENSIVE_ASSET,
-    SECTOR_ETFS,
-)
+from sector_rotation.config import BENCHMARK, DEFENSIVE_ASSET
 from sector_rotation.data import download_adjusted_prices, generate_demo_prices
 from sector_rotation.metrics import benchmark_returns, drawdown, equity_curve, performance_summary
-from sector_rotation.strategy import BacktestConfig, run_backtest
+from sector_rotation.strategy import (
+    PERIODS_PER_YEAR,
+    BacktestConfig,
+    compute_momentum_components,
+    run_backtest,
+)
+from sector_rotation.universe import (
+    UNIVERSE_GROUPS,
+    AssetInfo,
+    assets_for,
+    custom_assets,
+    groups_for,
+)
+
+
+FREQUENCY_SETTINGS = {
+    "Daily": {
+        "label": "日線",
+        "unit": "交易日",
+        "lookbacks": {5: 10, 21: 20, 63: 30, 126: 40},
+        "volatility_window": 63,
+    },
+    "Weekly": {
+        "label": "週線",
+        "unit": "週",
+        "lookbacks": {4: 10, 13: 20, 26: 30, 52: 40},
+        "volatility_window": 13,
+    },
+    "Monthly": {
+        "label": "月線",
+        "unit": "月",
+        "lookbacks": {1: 10, 3: 20, 6: 30, 12: 40},
+        "volatility_window": 6,
+    },
+}
 
 
 st.set_page_config(
-    page_title="Sector Rotation Research Lab",
+    page_title="Multi-Layer Rotation Research Lab",
     page_icon="📈",
     layout="wide",
 )
@@ -27,7 +58,7 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container {padding-top: 1.8rem; padding-bottom: 3rem;}
+    .block-container {padding-top: 1.5rem; padding-bottom: 3rem;}
     [data-testid="stMetric"] {
         background: rgba(30, 41, 59, 0.46);
         border: 1px solid rgba(148, 163, 184, 0.20);
@@ -46,8 +77,16 @@ def load_live_data(tickers: tuple[str, ...], start: date, end: date) -> pd.DataF
 
 
 @st.cache_data(show_spinner=False)
-def load_demo_data() -> pd.DataFrame:
-    return generate_demo_prices()
+def load_demo_data(tickers: tuple[str, ...]) -> pd.DataFrame:
+    return generate_demo_prices(tickers=list(tickers))
+
+
+def parse_tickers(raw: str) -> list[str]:
+    return [
+        token.upper()
+        for token in re.split(r"[\s,;]+", raw.strip())
+        if token and re.fullmatch(r"[A-Za-z0-9.^=-]+", token)
+    ]
 
 
 def format_percent(value: float) -> str:
@@ -72,157 +111,227 @@ def performance_chart(strategy: pd.Series, benchmark: pd.Series) -> go.Figure:
     return figure
 
 
-def allocation_chart(weights: pd.DataFrame) -> go.Figure:
+def allocation_chart(weights: pd.DataFrame, metadata: dict[str, AssetInfo]) -> go.Figure:
     visible = weights.loc[:, (weights.abs().sum() > 0)]
-    renamed = visible.rename(columns={**SECTOR_ETFS, DEFENSIVE_ASSET: "Defensive / SHY"})
+    renamed = visible.rename(
+        columns={
+            **{ticker: f"{ticker} · {info.name}" for ticker, info in metadata.items()},
+            DEFENSIVE_ASSET: "SHY · Defensive",
+        }
+    )
     figure = px.area(
         renamed,
         labels={"value": "Portfolio weight", "index": "", "variable": ""},
     )
-    figure.update_layout(hovermode="x unified", legend_orientation="h", height=430)
+    figure.update_layout(hovermode="x unified", legend_orientation="h", height=440)
     figure.update_yaxes(tickformat=".0%", range=[0, 1])
     return figure
 
 
-st.title("Sector Rotation Research Lab")
+st.title("Multi-Layer Rotation Research Lab")
 st.caption(
-    "Rank U.S. sector ETFs by composite momentum, rotate monthly, and verify the result "
-    "with explicit signal timing, costs, and risk metrics."
+    "每日／每週／每月動能輪動｜大產業、細分產業、結構性主題、風格資產與主題股票籃子"
 )
 
 with st.sidebar:
-    st.header("Research controls")
+    st.header("研究範圍")
     data_mode = st.radio(
-        "Data source",
+        "資料來源",
         ["Live Yahoo Finance", "Offline demo"],
-        help="Offline demo uses synthetic data and is not historical performance.",
+        index=1 if os.environ.get("SECTOR_ROTATION_TEST_MODE") == "1" else 0,
+        help="Offline demo 使用合成資料，只能測試功能。",
     )
+
+    universe_options = [*UNIVERSE_GROUPS, "Custom tickers — 自訂"]
+    universe_name = st.selectbox(
+        "研究層級",
+        universe_options,
+        index=1,
+    )
+
+    if universe_name == "Custom tickers — 自訂":
+        custom_input = st.text_area(
+            "輸入 ticker",
+            value="NVDA AMD AVGO MSFT AMZN GOOGL",
+            help="用空格、逗號或分號分隔。",
+        )
+        metadata = custom_assets(parse_tickers(custom_input))
+        selected_groups = ["Custom"]
+    else:
+        group_options = groups_for(universe_name)
+        if universe_name in {"Broad sectors — ETFs", "Detailed industries — ETFs"}:
+            default_groups = group_options
+        else:
+            default_groups = group_options[:3]
+        selected_groups = st.multiselect(
+            "產業／主題分類",
+            group_options,
+            default=default_groups,
+        )
+        metadata = assets_for(universe_name, selected_groups)
+
+    frequency = st.segmented_control(
+        "訊號與再平衡頻率",
+        ["Daily", "Weekly", "Monthly"],
+        default="Weekly",
+        format_func=lambda value: FREQUENCY_SETTINGS[value]["label"],
+    )
+    if frequency is None:
+        frequency = "Weekly"
+    frequency_settings = FREQUENCY_SETTINGS[frequency]
+
     latest_allowed_start = date.today() - timedelta(days=400)
     if (
-        "research_start_date" in st.session_state
-        and st.session_state.research_start_date > latest_allowed_start
+        "research_start_date_v2" in st.session_state
+        and st.session_state.research_start_date_v2 > latest_allowed_start
     ):
-        st.session_state.research_start_date = date(2012, 1, 1)
+        st.session_state.research_start_date_v2 = date(2012, 1, 1)
     start_date = st.date_input(
-        "Start date",
+        "回測開始日期",
         value=date(2012, 1, 1),
         max_value=latest_allowed_start,
-        key="research_start_date",
-        help="At least 13 months of history are required for the longest momentum lookback.",
+        key="research_start_date_v2",
     )
-    top_n = st.slider("Number of sectors to hold", 1, 6, 3)
+
+    st.header("投資組合規則")
+    asset_count = max(1, len(metadata))
+    top_n = st.slider("持有排名前 N 個標的", 1, min(15, asset_count), min(5, asset_count))
     weighting = st.selectbox(
-        "Position weighting",
+        "配置方式",
         ["Equal weight", "Momentum weight", "Inverse volatility"],
     )
-    risk_adjusted = st.toggle(
-        "Risk-adjust momentum",
-        value=False,
-        help="Divide composite momentum by trailing annualized volatility.",
-    )
-    positive_filter = st.toggle(
-        "Require positive momentum",
-        value=True,
-        help=f"Move to {DEFENSIVE_ASSET} when no sector has positive momentum.",
-    )
+    risk_adjusted = st.toggle("使用風險調整動能", value=False)
+    positive_filter = st.toggle("只持有正動能標的", value=True)
+    use_defensive = st.toggle(f"無合格標的時持有 {DEFENSIVE_ASSET}", value=True)
     cost_bps = st.number_input(
-        "Transaction cost (bps per turnover)",
+        "每次換手成本（bps）",
         min_value=0.0,
         max_value=100.0,
         value=5.0,
         step=1.0,
     )
 
-    st.subheader("Composite momentum")
+    st.header("多週期動能")
     lookback_weights: dict[int, float] = {}
-    for months, default_weight in DEFAULT_LOOKBACK_WEIGHTS.items():
-        lookback_weights[months] = st.slider(
-            f"{months}-month weight",
+    for periods, default_weight in frequency_settings["lookbacks"].items():
+        lookback_weights[periods] = st.slider(
+            f"{periods} {frequency_settings['unit']}",
             min_value=0,
             max_value=100,
-            value=int(default_weight * 100),
+            value=default_weight,
             step=5,
         )
 
+if not metadata:
+    st.error("請至少選擇一個分類或輸入一個有效 ticker。")
+    st.stop()
 if sum(lookback_weights.values()) == 0:
-    st.error("At least one momentum weight must be greater than zero.")
+    st.error("至少一個動能週期的權重必須大於零。")
     st.stop()
 
-all_tickers = tuple([*SECTOR_ETFS, BENCHMARK, DEFENSIVE_ASSET])
+asset_tickers = list(metadata)
+download_tickers = tuple(dict.fromkeys([*asset_tickers, BENCHMARK, DEFENSIVE_ASSET]))
+
 try:
-    with st.spinner("Preparing market data and running the research model…"):
+    with st.spinner(
+        f"正在下載 {len(download_tickers)} 個標的並執行{frequency_settings['label']}研究…"
+    ):
         if data_mode == "Live Yahoo Finance":
-            # Yahoo's end date is exclusive, so tomorrow includes the latest
-            # available trading session.
             prices = load_live_data(
-                all_tickers,
+                download_tickers,
                 start_date,
                 date.today() + timedelta(days=1),
             )
         else:
-            prices = load_demo_data()
-            prices = prices.loc[pd.Timestamp(start_date) :]
+            prices = load_demo_data(download_tickers).loc[pd.Timestamp(start_date) :]
 
-        available_sectors = [ticker for ticker in SECTOR_ETFS if ticker in prices]
+        available_assets = [ticker for ticker in asset_tickers if ticker in prices]
+        if not available_assets:
+            raise RuntimeError(
+                "Selected assets have no usable data. Choose Live Yahoo Finance or another universe."
+            )
+
         config = BacktestConfig(
             lookback_weights=lookback_weights,
-            top_n=top_n,
+            frequency=frequency,
+            top_n=min(top_n, len(available_assets)),
             weighting=weighting,
             require_positive_momentum=positive_filter,
             risk_adjusted_score=risk_adjusted,
-            defensive_asset=DEFENSIVE_ASSET,
+            defensive_asset=DEFENSIVE_ASSET if use_defensive else None,
             transaction_cost_bps=cost_bps,
+            volatility_window=frequency_settings["volatility_window"],
         )
-        result = run_backtest(prices, available_sectors, config)
+        result = run_backtest(prices, available_assets, config)
 except Exception as exc:
     st.error(f"Research run failed: {exc}")
-    st.info(
-        "Use a start date at least 13 months before today and retry. "
-        "If Yahoo Finance is temporarily unavailable, use Offline demo."
-    )
+    st.info("請確認日期、ticker 與網路；若只是測試介面，可切換 Offline demo。")
     st.stop()
 
-if result.net_returns.empty:
-    st.warning("The selected date range is too short for the longest lookback period.")
+if result.net_returns.empty or result.scores.empty:
+    st.warning("資料歷史不足以計算最長動能週期，請把開始日期往前調。")
     st.stop()
 
-benchmark = benchmark_returns(result.monthly_prices, BENCHMARK, result.net_returns.index[0])
-strategy_metrics = performance_summary(result.net_returns)
-benchmark_metrics = performance_summary(benchmark)
+periods_per_year = PERIODS_PER_YEAR[frequency]
+benchmark = benchmark_returns(result.sampled_prices, BENCHMARK, result.net_returns.index[0])
+strategy_metrics = performance_summary(result.net_returns, periods_per_year)
+benchmark_metrics = performance_summary(benchmark, periods_per_year)
 latest_signal_date = result.scores.index[-1]
 
-if data_mode == "Offline demo":
-    st.warning("Offline demo is active. All prices and performance shown are synthetic.")
-
-st.subheader("Latest model signal")
-st.caption(
-    f"Signal date: {latest_signal_date:%Y-%m-%d}. This target allocation is applied only "
-    "after the signal date in the historical backtest."
+components = compute_momentum_components(
+    result.sampled_prices,
+    available_assets,
+    list(lookback_weights),
 )
-
 latest_scores = result.scores.iloc[-1].dropna().sort_values(ascending=False)
 latest_weights = result.target_weights.iloc[-1]
-ranking = pd.DataFrame(
-    {
-        "ETF": latest_scores.index,
-        "Sector": [SECTOR_ETFS.get(ticker, ticker) for ticker in latest_scores.index],
-        "Momentum score": latest_scores.values,
-        "Target weight": [latest_weights.get(ticker, 0.0) for ticker in latest_scores.index],
+
+ranking_rows = []
+for ticker, score in latest_scores.items():
+    info = metadata[ticker]
+    row = {
+        "Ticker": ticker,
+        "Name": info.name,
+        "Group": info.group,
+        "Momentum score": score,
+        "Target weight": latest_weights.get(ticker, 0.0),
     }
-)
+    for periods in lookback_weights:
+        row[f"{periods} {frequency_settings['unit']} return"] = components[periods].loc[
+            latest_signal_date, ticker
+        ]
+    ranking_rows.append(row)
+ranking = pd.DataFrame(ranking_rows)
 ranking.index = range(1, len(ranking) + 1)
+
+if data_mode == "Offline demo":
+    st.warning("Offline demo 使用合成資料，不是歷史投資績效。")
+
+coverage_columns = st.columns(4)
+coverage_columns[0].metric("研究標的", len(available_assets))
+coverage_columns[1].metric("分類數量", len({metadata[ticker].group for ticker in available_assets}))
+coverage_columns[2].metric("頻率", frequency_settings["label"])
+coverage_columns[3].metric("資料截止", f"{result.sampled_prices.index[-1]:%Y-%m-%d}")
+
+st.subheader("最新模型訊號")
+st.caption(
+    f"訊號日期：{latest_signal_date:%Y-%m-%d}。排名會延後一個"
+    f"{frequency_settings['unit']}才計入歷史報酬，避免前視偏誤。"
+)
 
 allocation = latest_weights[latest_weights > 0].sort_values(ascending=False)
 if allocation.empty:
-    st.info("The model currently holds cash.")
+    st.info("目前模型持有現金。")
 else:
-    cards = st.columns(len(allocation))
-    for card, (ticker, weight) in zip(cards, allocation.items()):
-        label = SECTOR_ETFS.get(ticker, "Defensive / SHY")
-        card.metric(ticker, f"{weight:.1%}", label)
+    card_count = min(6, len(allocation))
+    cards = st.columns(card_count)
+    for number, (ticker, weight) in enumerate(allocation.items()):
+        info = metadata.get(ticker)
+        label = info.name if info else "Defensive asset"
+        cards[number % card_count].metric(ticker, f"{weight:.1%}", label)
 
-tab_overview, tab_rankings, tab_portfolio, tab_method = st.tabs(
-    ["Performance", "Sector rankings", "Portfolio history", "Methodology"]
+tab_overview, tab_rankings, tab_groups, tab_portfolio, tab_method = st.tabs(
+    ["績效", "詳細排名", "分類比較", "配置歷史", "方法與限制"]
 )
 
 with tab_overview:
@@ -231,10 +340,12 @@ with tab_overview:
     metric_columns[1].metric("Strategy Sharpe", format_number(strategy_metrics["Sharpe"]))
     metric_columns[2].metric("Max drawdown", format_percent(strategy_metrics["Max drawdown"]))
     metric_columns[3].metric("Annual volatility", format_percent(strategy_metrics["Volatility"]))
-    metric_columns[4].metric("Average annual turnover", f"{result.turnover.mean() * 12:.1f}x")
+    metric_columns[4].metric(
+        "Annual turnover",
+        f"{result.turnover.mean() * periods_per_year:.1f}x",
+    )
 
     st.plotly_chart(performance_chart(result.net_returns, benchmark), width="stretch")
-
     left, right = st.columns([2, 1])
     with left:
         drawdowns = pd.concat(
@@ -255,58 +366,130 @@ with tab_overview:
     with right:
         comparison = pd.DataFrame(
             {"Strategy": strategy_metrics, BENCHMARK: benchmark_metrics}
-        )
-        display = comparison.astype(object)
+        ).astype(object)
         for row in ["CAGR", "Volatility", "Max drawdown", "Win rate"]:
-            display.loc[row] = display.loc[row].map(format_percent)
-        display.loc["Sharpe"] = display.loc["Sharpe"].map(format_number)
-        st.dataframe(display, width="stretch")
+            comparison.loc[row] = comparison.loc[row].map(format_percent)
+        comparison.loc["Sharpe"] = comparison.loc["Sharpe"].map(format_number)
+        st.dataframe(comparison, width="stretch")
 
 with tab_rankings:
-    st.dataframe(
-        ranking.style.format({"Momentum score": "{:.3f}", "Target weight": "{:.1%}"}),
-        width="stretch",
-        height=430,
+    return_columns = [
+        column for column in ranking if column.endswith(f"{frequency_settings['unit']} return")
+    ]
+    formatters = {
+        "Momentum score": "{:.3f}",
+        "Target weight": "{:.1%}",
+        **{column: "{:.1%}" for column in return_columns},
+    }
+    st.dataframe(ranking.style.format(formatters), width="stretch", height=520)
+    st.download_button(
+        "下載最新排名 CSV",
+        data=ranking.to_csv(index=False).encode("utf-8"),
+        file_name=f"rotation-ranking-{latest_signal_date:%Y-%m-%d}.csv",
+        mime="text/csv",
     )
-    score_history = result.scores.rename(columns=SECTOR_ETFS)
+
+    history = result.scores.rename(
+        columns={ticker: f"{ticker} · {metadata[ticker].name}" for ticker in available_assets}
+    )
+    history_periods = {"Daily": 126, "Weekly": 52, "Monthly": 36}[frequency]
     st.plotly_chart(
         px.line(
-            score_history.tail(36),
+            history.tail(history_periods),
             labels={"value": "Momentum score", "index": "", "variable": ""},
-            title="Momentum leadership — trailing 36 months",
-        ).update_layout(hovermode="x unified", height=440),
+            title=f"近期動能領先變化（{history_periods} 個{frequency_settings['unit']}）",
+        ).update_layout(hovermode="x unified", height=470),
         width="stretch",
     )
 
+with tab_groups:
+    group_scores = (
+        ranking.groupby("Group", as_index=False)
+        .agg(
+            Average_score=("Momentum score", "mean"),
+            Best_score=("Momentum score", "max"),
+            Positive_assets=("Momentum score", lambda values: int((values > 0).sum())),
+            Asset_count=("Ticker", "count"),
+        )
+        .sort_values("Average_score", ascending=True)
+    )
+    group_figure = px.bar(
+        group_scores,
+        x="Average_score",
+        y="Group",
+        orientation="h",
+        color="Average_score",
+        color_continuous_scale="RdYlGn",
+        title="分類平均動能",
+    )
+    group_figure.update_layout(height=max(360, len(group_scores) * 48))
+    st.plotly_chart(group_figure, width="stretch")
+
+    heatmap_data = ranking.set_index("Ticker")[return_columns]
+    heatmap_data.columns = [column.replace(" return", "") for column in heatmap_data.columns]
+    heatmap = px.imshow(
+        heatmap_data,
+        aspect="auto",
+        color_continuous_scale="RdYlGn",
+        color_continuous_midpoint=0,
+        text_auto=".1%",
+        title="每個標的的多週期報酬",
+    )
+    heatmap.update_layout(height=max(420, len(heatmap_data) * 27))
+    st.plotly_chart(heatmap, width="stretch")
+
 with tab_portfolio:
-    st.plotly_chart(allocation_chart(result.deployed_weights), width="stretch")
-    st.subheader("Recent deployed weights")
-    recent = result.deployed_weights.tail(12).rename(
-        columns={**SECTOR_ETFS, DEFENSIVE_ASSET: "Defensive / SHY"}
+    st.plotly_chart(
+        allocation_chart(result.deployed_weights, metadata),
+        width="stretch",
+    )
+    recent_rows = {"Daily": 30, "Weekly": 26, "Monthly": 12}[frequency]
+    recent = result.deployed_weights.tail(recent_rows).rename(
+        columns={
+            **{ticker: f"{ticker} · {metadata[ticker].name}" for ticker in available_assets},
+            DEFENSIVE_ASSET: "SHY · Defensive",
+        }
     )
     recent = recent.loc[:, (recent.abs().sum() > 0)]
     st.dataframe(recent.style.format("{:.1%}"), width="stretch")
+    st.download_button(
+        "下載配置歷史 CSV",
+        data=result.deployed_weights.to_csv().encode("utf-8"),
+        file_name=f"rotation-weights-{frequency.lower()}.csv",
+        mime="text/csv",
+    )
 
 with tab_method:
     st.markdown(
         f"""
-        ### Research sequence
+        ### 本次研究設定
 
-        1. Convert adjusted daily prices to calendar month-end observations.
-        2. Calculate {", ".join(f"{month}-month" for month in lookback_weights)} total returns.
-        3. Normalize the selected lookback weights and combine them into one score.
-        4. Optionally divide the score by trailing annualized volatility.
-        5. Keep the top **{top_n}** sectors{" with positive scores" if positive_filter else ""}.
-        6. Allocate with **{weighting.lower()}**.
-        7. Shift every signal forward by one month before calculating portfolio returns.
-        8. Charge **{cost_bps:.0f} bps** according to monthly portfolio turnover.
+        - 研究層級：**{universe_name}**
+        - 分類：**{", ".join(selected_groups)}**
+        - 訊號與再平衡：**{frequency_settings["label"]}**
+        - 標的數量：**{len(available_assets)}**
+        - 持有數量：**Top {min(top_n, len(available_assets))}**
+        - 配置方法：**{weighting}**
+        - 風險調整：**{"開啟" if risk_adjusted else "關閉"}**
+        - 正動能過濾：**{"開啟" if positive_filter else "關閉"}**
+        - 防禦資產：**{DEFENSIVE_ASSET if use_defensive else "現金"}**
+        - 換手成本：**{cost_bps:.0f} bps**
 
-        ### Interpretation
+        ### 計算流程
 
-        This application is a research and education tool. It does not account for taxes,
-        bid–ask spreads, market impact, ETF closures, all corporate actions, or every source
-        of survivorship and data-vendor bias. Yahoo Finance data may be delayed, revised, or
-        unavailable. Synthetic demo results are not historical results. Nothing displayed
-        here is personalized investment advice.
+        1. 將調整後日價格轉換成指定的日線、週線或月線資料。
+        2. 計算 {", ".join(f"{periods} {frequency_settings['unit']}" for periods in lookback_weights)} 報酬。
+        3. 正規化權重並組合成一個 momentum score。
+        4. 可選擇把分數除以同期年化波動率。
+        5. 通過正動能篩選後，選擇排名前 N 個標的。
+        6. 依照指定方式配置，並把訊號延後一期才計算報酬。
+        7. 根據每期換手率扣除交易成本。
+
+        ### 重要限制
+
+        主題股票籃子是研究分類，不是官方指數，也不代表完整產業成分。
+        日線輪動對交易成本、滑價和訊號雜訊特別敏感。Yahoo Finance 資料可能延遲、
+        修正或缺失。本工具未完整處理稅務、市場衝擊、退市偏誤和實際成交限制。
+        回測不保證未來績效，畫面內容不是個人化投資建議。
         """
     )

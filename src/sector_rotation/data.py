@@ -88,6 +88,7 @@ def generate_demo_prices(
     start: str = "2012-01-01",
     end: str | None = None,
     seed: int = 42,
+    tickers: list[str] | None = None,
 ) -> pd.DataFrame:
     """Generate reproducible correlated prices for offline demonstrations.
 
@@ -96,27 +97,33 @@ def generate_demo_prices(
     """
     end = end or pd.Timestamp.today().strftime("%Y-%m-%d")
     index = pd.bdate_range(start, end)
-    tickers = [*SECTOR_ETFS, BENCHMARK, DEFENSIVE_ASSET]
+    tickers = list(dict.fromkeys(tickers or [*SECTOR_ETFS, BENCHMARK, DEFENSIVE_ASSET]))
+    research_tickers = [
+        ticker for ticker in tickers if ticker not in {BENCHMARK, DEFENSIVE_ASSET}
+    ]
     rng = np.random.default_rng(seed)
 
     market = rng.normal(0.00028, 0.009, len(index))
     returns = pd.DataFrame(index=index, columns=tickers, dtype=float)
     regime_length = 252
 
-    for number, ticker in enumerate(SECTOR_ETFS):
+    asset_count = max(1, len(research_tickers))
+    for number, ticker in enumerate(research_tickers):
         idiosyncratic = rng.normal(0, 0.0065 + (number % 3) * 0.0007, len(index))
         regime_alpha = np.zeros(len(index))
         for regime_start in range(0, len(index), regime_length):
-            leader = (regime_start // regime_length) % len(SECTOR_ETFS)
+            leader = (regime_start // regime_length) % asset_count
             distance = min(
-                (number - leader) % len(SECTOR_ETFS),
-                (leader - number) % len(SECTOR_ETFS),
+                (number - leader) % asset_count,
+                (leader - number) % asset_count,
             )
             alpha = 0.00045 if distance == 0 else (0.00018 if distance == 1 else -0.00005)
             regime_alpha[regime_start : regime_start + regime_length] = alpha
         returns[ticker] = 0.78 * market + idiosyncratic + regime_alpha
 
-    returns[BENCHMARK] = market + rng.normal(0, 0.002, len(index))
-    returns[DEFENSIVE_ASSET] = rng.normal(0.00008, 0.0009, len(index))
+    if BENCHMARK in tickers:
+        returns[BENCHMARK] = market + rng.normal(0, 0.002, len(index))
+    if DEFENSIVE_ASSET in tickers:
+        returns[DEFENSIVE_ASSET] = rng.normal(0.00008, 0.0009, len(index))
     prices = 100 * (1 + returns.clip(lower=-0.20)).cumprod()
     return prices
