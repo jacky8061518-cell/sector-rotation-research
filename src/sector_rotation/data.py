@@ -15,29 +15,65 @@ def download_adjusted_prices(
     start: date,
     end: date,
 ) -> pd.DataFrame:
-    """Download adjusted daily closing prices from Yahoo Finance."""
+    """Download adjusted daily closing prices from Yahoo Finance.
+
+    Yahoo treats ``end`` as an exclusive boundary. Callers should therefore
+    pass the day after the final date they want included.
+    """
+    if end <= start:
+        raise ValueError(
+            "The end date must be later than the start date. "
+            "Choose a start date with at least 13 months of history."
+        )
     try:
         import yfinance as yf
     except ImportError as exc:  # pragma: no cover - exercised by the UI
         raise RuntimeError("yfinance is not installed. Run: pip install -r requirements.txt") from exc
 
-    raw = yf.download(
-        tickers=tickers,
-        start=start,
-        end=end,
-        auto_adjust=True,
-        progress=False,
-        group_by="column",
-        threads=True,
-    )
-    if raw.empty:
-        raise RuntimeError("Yahoo Finance returned no data for the selected period.")
+    def fetch(requested: list[str]) -> pd.DataFrame:
+        return yf.download(
+            tickers=requested,
+            start=start,
+            end=end,
+            auto_adjust=True,
+            progress=False,
+            group_by="column",
+            threads=False,
+            timeout=20,
+        )
 
-    if isinstance(raw.columns, pd.MultiIndex):
-        prices = raw["Close"].copy()
-    else:
-        prices = raw[["Close"]].copy()
-        prices.columns = [tickers[0]]
+    def close_prices(raw: pd.DataFrame, requested: list[str]) -> pd.DataFrame:
+        if raw.empty:
+            return pd.DataFrame()
+        if isinstance(raw.columns, pd.MultiIndex):
+            if "Close" not in raw.columns.get_level_values(0):
+                return pd.DataFrame()
+            return raw["Close"].copy()
+        if "Close" not in raw:
+            return pd.DataFrame()
+        result = raw[["Close"]].copy()
+        result.columns = [requested[0]]
+        return result
+
+    raw = fetch(tickers)
+    prices = close_prices(raw, tickers)
+
+    # A batch request can occasionally fail even when individual tickers are
+    # available. Retry one ticker at a time and retain every successful series.
+    if prices.empty:
+        recovered: list[pd.DataFrame] = []
+        for ticker in tickers:
+            single = close_prices(fetch([ticker]), [ticker])
+            if not single.empty:
+                recovered.append(single.rename(columns={single.columns[0]: ticker}))
+        if recovered:
+            prices = pd.concat(recovered, axis=1)
+
+    if prices.empty:
+        raise RuntimeError(
+            "Yahoo Finance returned no data. Check the date range and connection, "
+            "then retry; the end date must be later than the start date."
+        )
 
     prices = prices.reindex(columns=tickers)
     prices = prices.dropna(how="all").ffill()

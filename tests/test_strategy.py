@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
+import pytest
 
+from sector_rotation.data import download_adjusted_prices
 from sector_rotation.strategy import (
     BacktestConfig,
     compute_momentum_scores,
@@ -61,3 +63,9 @@ def test_weights_sum_to_one_after_signals_are_available():
     result = run_backtest(prices, ["AAA", "BBB"], config)
     sums = result.target_weights.sum(axis=1)
     assert np.allclose(sums, 1.0)
+
+
+def test_market_data_rejects_empty_date_range_before_network_call():
+    same_day = pd.Timestamp("2026-07-29").date()
+    with pytest.raises(ValueError, match="end date must be later"):
+        download_adjusted_prices(["SPY"], same_day, same_day)

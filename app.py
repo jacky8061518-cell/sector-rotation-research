@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import plotly.express as px
@@ -97,7 +97,19 @@ with st.sidebar:
         ["Live Yahoo Finance", "Offline demo"],
         help="Offline demo uses synthetic data and is not historical performance.",
     )
-    start_date = st.date_input("Start date", value=date(2012, 1, 1), max_value=date.today())
+    latest_allowed_start = date.today() - timedelta(days=400)
+    if (
+        "research_start_date" in st.session_state
+        and st.session_state.research_start_date > latest_allowed_start
+    ):
+        st.session_state.research_start_date = date(2012, 1, 1)
+    start_date = st.date_input(
+        "Start date",
+        value=date(2012, 1, 1),
+        max_value=latest_allowed_start,
+        key="research_start_date",
+        help="At least 13 months of history are required for the longest momentum lookback.",
+    )
     top_n = st.slider("Number of sectors to hold", 1, 6, 3)
     weighting = st.selectbox(
         "Position weighting",
@@ -140,7 +152,13 @@ all_tickers = tuple([*SECTOR_ETFS, BENCHMARK, DEFENSIVE_ASSET])
 try:
     with st.spinner("Preparing market data and running the research model…"):
         if data_mode == "Live Yahoo Finance":
-            prices = load_live_data(all_tickers, start_date, date.today())
+            # Yahoo's end date is exclusive, so tomorrow includes the latest
+            # available trading session.
+            prices = load_live_data(
+                all_tickers,
+                start_date,
+                date.today() + timedelta(days=1),
+            )
         else:
             prices = load_demo_data()
             prices = prices.loc[pd.Timestamp(start_date) :]
@@ -158,7 +176,10 @@ try:
         result = run_backtest(prices, available_sectors, config)
 except Exception as exc:
     st.error(f"Research run failed: {exc}")
-    st.info("Try Offline demo to test the application without a market-data connection.")
+    st.info(
+        "Use a start date at least 13 months before today and retry. "
+        "If Yahoo Finance is temporarily unavailable, use Offline demo."
+    )
     st.stop()
 
 if result.net_returns.empty:
@@ -212,7 +233,7 @@ with tab_overview:
     metric_columns[3].metric("Annual volatility", format_percent(strategy_metrics["Volatility"]))
     metric_columns[4].metric("Average annual turnover", f"{result.turnover.mean() * 12:.1f}x")
 
-    st.plotly_chart(performance_chart(result.net_returns, benchmark), use_container_width=True)
+    st.plotly_chart(performance_chart(result.net_returns, benchmark), width="stretch")
 
     left, right = st.columns([2, 1])
     with left:
@@ -230,7 +251,7 @@ with tab_overview:
         )
         drawdown_figure.update_yaxes(tickformat=".0%")
         drawdown_figure.update_layout(hovermode="x unified", height=350)
-        st.plotly_chart(drawdown_figure, use_container_width=True)
+        st.plotly_chart(drawdown_figure, width="stretch")
     with right:
         comparison = pd.DataFrame(
             {"Strategy": strategy_metrics, BENCHMARK: benchmark_metrics}
@@ -239,12 +260,12 @@ with tab_overview:
         for row in ["CAGR", "Volatility", "Max drawdown", "Win rate"]:
             display.loc[row] = display.loc[row].map(format_percent)
         display.loc["Sharpe"] = display.loc["Sharpe"].map(format_number)
-        st.dataframe(display, use_container_width=True)
+        st.dataframe(display, width="stretch")
 
 with tab_rankings:
     st.dataframe(
         ranking.style.format({"Momentum score": "{:.3f}", "Target weight": "{:.1%}"}),
-        use_container_width=True,
+        width="stretch",
         height=430,
     )
     score_history = result.scores.rename(columns=SECTOR_ETFS)
@@ -254,17 +275,17 @@ with tab_rankings:
             labels={"value": "Momentum score", "index": "", "variable": ""},
             title="Momentum leadership — trailing 36 months",
         ).update_layout(hovermode="x unified", height=440),
-        use_container_width=True,
+        width="stretch",
     )
 
 with tab_portfolio:
-    st.plotly_chart(allocation_chart(result.deployed_weights), use_container_width=True)
+    st.plotly_chart(allocation_chart(result.deployed_weights), width="stretch")
     st.subheader("Recent deployed weights")
     recent = result.deployed_weights.tail(12).rename(
         columns={**SECTOR_ETFS, DEFENSIVE_ASSET: "Defensive / SHY"}
     )
     recent = recent.loc[:, (recent.abs().sum() > 0)]
-    st.dataframe(recent.style.format("{:.1%}"), use_container_width=True)
+    st.dataframe(recent.style.format("{:.1%}"), width="stretch")
 
 with tab_method:
     st.markdown(
