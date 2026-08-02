@@ -10,16 +10,59 @@ import pandas as pd
 from .config import BENCHMARK, DEFENSIVE_ASSET, SECTOR_ETFS
 
 
+def repair_taiwan_price_discontinuities(
+    prices: pd.DataFrame,
+    threshold: float = 0.40,
+) -> pd.DataFrame:
+    """Normalize unadjusted corporate-action jumps in Taiwan price histories.
+
+    Yahoo's adjusted-price history occasionally omits a split, capital
+    reduction, or other corporate-action adjustment. Taiwan-listed securities
+    normally cannot move by more than the exchange price limit in one session,
+    so an internal jump larger than ``threshold`` is a data discontinuity, not
+    an investable return.
+
+    For every such event, the history before the event is rebased by the
+    observed price ratio. This preserves all ordinary day-to-day returns while
+    making the corporate-action boundary continuous.
+    """
+    if not 0 < threshold < 1:
+        raise ValueError("threshold must be between 0 and 1.")
+
+    repaired = prices.copy()
+    for ticker in repaired.columns:
+        if not isinstance(ticker, str) or not ticker.endswith((".TW", ".TWO")):
+            continue
+
+        series = repaired[ticker].dropna()
+        if len(series) < 2:
+            continue
+        ratios = series.div(series.shift(1))
+        events = ratios[(ratios < 1 - threshold) | (ratios > 1 + threshold)]
+
+        for event_date, ratio in events.items():
+            if pd.isna(ratio) or ratio <= 0:
+                continue
+            repaired.loc[repaired.index < event_date, ticker] *= float(ratio)
+
+    return repaired
+
+
 def download_adjusted_prices(
     tickers: list[str],
     start: date,
     end: date,
     min_observations: int = 30,
+    *,
+    auto_adjust: bool = True,
+    batch_size: int = 100,
 ) -> pd.DataFrame:
-    """Download adjusted daily closing prices from Yahoo Finance.
+    """Download daily closing prices from Yahoo Finance.
 
     Yahoo treats ``end`` as an exclusive boundary. Callers should therefore
-    pass the day after the final date they want included.
+    pass the day after the final date they want included. ``auto_adjust=True``
+    returns dividend- and split-adjusted prices. ``False`` returns closing
+    prices, after the Taiwan split-scale continuity guard is applied.
     """
     if end <= start:
         raise ValueError(
@@ -31,15 +74,18 @@ def download_adjusted_prices(
     except ImportError as exc:  # pragma: no cover - exercised by the UI
         raise RuntimeError("yfinance is not installed. Run: pip install -r requirements.txt") from exc
 
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+
     def fetch(requested: list[str]) -> pd.DataFrame:
         return yf.download(
             tickers=requested,
             start=start,
             end=end,
-            auto_adjust=True,
+            auto_adjust=auto_adjust,
             progress=False,
             group_by="column",
-            threads=False,
+            threads=min(16, len(requested)),
             timeout=20,
         )
 
@@ -56,19 +102,31 @@ def download_adjusted_prices(
         result.columns = [requested[0]]
         return result
 
-    raw = fetch(tickers)
-    prices = close_prices(raw, tickers)
+    batches = [
+        tickers[offset : offset + batch_size]
+        for offset in range(0, len(tickers), batch_size)
+    ]
+    downloaded: list[pd.DataFrame] = []
+    for requested in batches:
+        raw = fetch(requested)
+        batch_prices = close_prices(raw, requested)
 
-    # A batch request can occasionally fail even when individual tickers are
-    # available. Retry one ticker at a time and retain every successful series.
-    if prices.empty:
-        recovered: list[pd.DataFrame] = []
-        for ticker in tickers:
-            single = close_prices(fetch([ticker]), [ticker])
-            if not single.empty:
-                recovered.append(single.rename(columns={single.columns[0]: ticker}))
-        if recovered:
-            prices = pd.concat(recovered, axis=1)
+        # A batch request can occasionally fail even when individual tickers
+        # are available. Retry its members one at a time.
+        if batch_prices.empty:
+            recovered: list[pd.DataFrame] = []
+            for ticker in requested:
+                single = close_prices(fetch([ticker]), [ticker])
+                if not single.empty:
+                    recovered.append(
+                        single.rename(columns={single.columns[0]: ticker})
+                    )
+            if recovered:
+                batch_prices = pd.concat(recovered, axis=1)
+        if not batch_prices.empty:
+            downloaded.append(batch_prices)
+
+    prices = pd.concat(downloaded, axis=1) if downloaded else pd.DataFrame()
 
     if prices.empty:
         raise RuntimeError(
@@ -84,7 +142,7 @@ def download_adjusted_prices(
     prices = prices.loc[:, usable]
     if prices.empty:
         raise RuntimeError("No ticker has enough usable observations.")
-    return prices
+    return repair_taiwan_price_discontinuities(prices)
 
 
 def generate_demo_prices(

@@ -16,6 +16,7 @@ class BacktestConfig:
     frequency: str = "Monthly"
     top_n: int = 3
     weighting: str = "Equal weight"
+    rank_weights: tuple[float, ...] | None = None
     require_positive_momentum: bool = True
     risk_adjusted_score: bool = False
     defensive_asset: str | None = "SHY"
@@ -33,8 +34,20 @@ class BacktestConfig:
             raise ValueError("top_n must be positive.")
         if self.frequency not in {"Daily", "Weekly", "Monthly"}:
             raise ValueError(f"Unknown frequency: {self.frequency}")
-        if self.weighting not in {"Equal weight", "Momentum weight", "Inverse volatility"}:
+        if self.weighting not in {
+            "Equal weight",
+            "Momentum weight",
+            "Inverse volatility",
+            "Custom rank weight",
+        }:
             raise ValueError(f"Unknown weighting method: {self.weighting}")
+        if self.weighting == "Custom rank weight":
+            if self.rank_weights is None or len(self.rank_weights) < self.top_n:
+                raise ValueError("Custom rank weights must cover every selected rank.")
+            if any(weight < 0 for weight in self.rank_weights[: self.top_n]):
+                raise ValueError("Custom rank weights cannot be negative.")
+            if sum(self.rank_weights[: self.top_n]) <= 0:
+                raise ValueError("Custom rank weights must have a positive sum.")
         if self.transaction_cost_bps < 0:
             raise ValueError("Transaction costs cannot be negative.")
 
@@ -162,13 +175,24 @@ def build_target_weights(
         elif config.weighting == "Momentum weight":
             strength = selected.clip(lower=0)
             allocation = strength / strength.sum()
-        else:
+        elif config.weighting == "Inverse volatility":
             selected_volatility = volatility.loc[timestamp, selected.index]
             inverse = 1 / selected_volatility.replace(0, np.nan)
             inverse = inverse.replace([np.inf, -np.inf], np.nan).dropna()
             allocation = (
                 inverse / inverse.sum()
                 if not inverse.empty
+                else pd.Series(1 / len(selected), index=selected.index)
+            )
+        else:
+            custom = pd.Series(
+                config.rank_weights[: len(selected)],
+                index=selected.index,
+                dtype=float,
+            )
+            allocation = (
+                custom / custom.sum()
+                if custom.sum() > 0
                 else pd.Series(1 / len(selected), index=selected.index)
             )
 

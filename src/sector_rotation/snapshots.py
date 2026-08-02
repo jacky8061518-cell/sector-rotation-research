@@ -4,19 +4,27 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from collections.abc import Mapping
 
 import pandas as pd
 
 from .config import BENCHMARK, DEFENSIVE_ASSET
-from .data import download_adjusted_prices
-from .strategy import BacktestConfig, run_backtest
-from .universe import UNIVERSE_GROUPS
+from .data import download_adjusted_prices, repair_taiwan_price_discontinuities
+from .rrg import build_rotation_summary, calculate_group_rrg
+from .strategy import BacktestConfig, resample_prices, run_backtest
+from .universe import UNIVERSE_GROUPS, AssetInfo
 
 
 FREQUENCY_LOOKBACKS = {
     "Daily": {5: 0.10, 21: 0.20, 63: 0.30, 126: 0.40},
     "Weekly": {4: 0.10, 13: 0.20, 26: 0.30, 52: 0.40},
     "Monthly": {1: 0.10, 3: 0.20, 6: 0.30, 12: 0.40},
+}
+
+RRG_WINDOWS = {
+    "Daily": {"long": 63, "momentum": 21},
+    "Weekly": {"long": 26, "momentum": 4},
+    "Monthly": {"long": 12, "momentum": 3},
 }
 
 
@@ -76,6 +84,10 @@ def update_price_cache(
         combined = pd.concat([cached, history, fresh]).sort_index()
     combined = combined[~combined.index.duplicated(keep="last")]
     combined = combined.reindex(columns=tickers).ffill()
+    # Repair existing caches as well as newly downloaded observations. This is
+    # necessary when a data vendor adds or omits a corporate-action adjustment
+    # after the original history was stored.
+    combined = repair_taiwan_price_discontinuities(combined)
     combined.to_parquet(cache_path)
     return combined
 
@@ -129,5 +141,53 @@ def build_rotation_snapshots(
         latest_path = output_dir / f"latest-{frequency.lower()}-ranking.csv"
         ranking.to_csv(dated_path, index=False)
         ranking.to_csv(latest_path, index=False)
+        written.extend([dated_path, latest_path])
+    return written
+
+
+def build_rrg_snapshots(
+    prices: pd.DataFrame,
+    output_dir: Path,
+    metadata: Mapping[str, AssetInfo],
+    benchmark: str,
+) -> list[Path]:
+    """Write explainable daily, weekly, and monthly group-rotation snapshots."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    available_metadata = {
+        ticker: info for ticker, info in metadata.items() if ticker in prices
+    }
+
+    for frequency, windows in RRG_WINDOWS.items():
+        sampled = resample_prices(
+            prices[[*available_metadata, benchmark]],
+            frequency,
+        )
+        ratio, momentum, group_indices = calculate_group_rrg(
+            sampled,
+            available_metadata,
+            benchmark,
+            long_window=windows["long"],
+            momentum_window=windows["momentum"],
+        )
+        summary = build_rotation_summary(
+            sampled,
+            available_metadata,
+            benchmark,
+            ratio,
+            momentum,
+            group_indices,
+            short_window=windows["momentum"],
+            long_window=windows["long"],
+        )
+        if summary.empty:
+            continue
+        signal_date = pd.Timestamp(summary["Signal date"].iloc[0])
+        dated_dir = output_dir / f"{signal_date:%Y-%m-%d}"
+        dated_dir.mkdir(parents=True, exist_ok=True)
+        dated_path = dated_dir / f"{frequency.lower()}-industry-rotation.csv"
+        latest_path = output_dir / f"latest-{frequency.lower()}-industry-rotation.csv"
+        summary.to_csv(dated_path, index=False)
+        summary.to_csv(latest_path, index=False)
         written.extend([dated_path, latest_path])
     return written

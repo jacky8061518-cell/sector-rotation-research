@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+pytest-of-*/
 .venv/
 venv/
 .env
@@ -9,6 +10,12 @@ venv/
 build/
 dist/
 .streamlit/secrets.toml
-data/databases/
+data/databases/*
+!data/databases/tw/
+data/databases/tw/*
+!data/databases/tw/adjusted-prices.parquet
+!data/databases/tw/institutional-flows.parquet
+!data/databases/tw/security-master.csv
+!data/databases/tw/coverage-report.csv
 data/cache/
 data/snapshots/

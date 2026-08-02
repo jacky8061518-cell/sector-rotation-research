@@ -67,6 +67,32 @@ def test_weights_sum_to_one_after_signals_are_available():
     assert np.allclose(sums, 1.0)
 
 
+def test_custom_rank_weights_follow_score_order_and_normalize():
+    prices = sample_prices()
+    config = BacktestConfig(
+        {3: 1.0},
+        top_n=2,
+        weighting="Custom rank weight",
+        rank_weights=(70.0, 30.0),
+        require_positive_momentum=False,
+        defensive_asset="SHY",
+    )
+    result = run_backtest(prices, ["AAA", "BBB"], config)
+    latest = result.target_weights.iloc[-1]
+    assert latest["AAA"] == pytest.approx(0.70)
+    assert latest["BBB"] == pytest.approx(0.30)
+
+
+def test_custom_rank_weights_must_cover_top_n():
+    with pytest.raises(ValueError, match="cover every selected rank"):
+        BacktestConfig(
+            {3: 1.0},
+            top_n=2,
+            weighting="Custom rank weight",
+            rank_weights=(100.0,),
+        )
+
+
 def test_market_data_rejects_empty_date_range_before_network_call():
     same_day = pd.Timestamp("2026-07-29").date()
     with pytest.raises(ValueError, match="end date must be later"):

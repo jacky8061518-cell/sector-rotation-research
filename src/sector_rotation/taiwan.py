@@ -12,6 +12,9 @@ from .universe import AssetInfo
 
 TWSE_COMPANY_API = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 TPEX_COMPANY_API = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+TWSE_FUND_API = "https://openapi.twse.com.tw/v1/opendata/t187ap47_L"
+TWSE_DAILY_QUOTES_API = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+TPEX_QUOTES_API = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
 
 TW_BENCHMARK = "0050.TW"
 TW_DEFENSIVE_ASSET = "00679B.TWO"
@@ -158,7 +161,110 @@ def fetch_taiwan_company_master() -> pd.DataFrame:
     master["Industry code"] = master["Industry code"].astype(str).str.strip().str.zfill(2)
     master["Industry"] = master["Industry code"].map(INDUSTRY_NAMES).fillna("其他／未分類")
     master["Issued shares"] = pd.to_numeric(master["Issued shares"], errors="coerce")
+    master["Asset type"] = "股票"
     return master.drop_duplicates("Yahoo ticker").sort_values(["Industry", "Market", "Code"])
+
+
+def _classify_etf(name: str, fund_type: str = "") -> str:
+    """Assign a practical research group from official ETF descriptions."""
+    text = f"{name} {fund_type}"
+    if "債" in text:
+        return "債券 ETF"
+    if any(token in text for token in ["原油", "黃金", "白銀", "期貨", "商品"]):
+        return "商品／期貨 ETF"
+    if any(token in text for token in ["槓桿", "反向", "正2", "正二", "反1", "反一"]):
+        return "槓桿／反向 ETF"
+    if any(token in text for token in ["主動式", "主動"]):
+        return "主動式 ETF"
+    if any(token in text for token in ["國外", "海外", "美國", "日本", "中國", "印度"]):
+        return "海外股票 ETF"
+    return "台灣股票 ETF"
+
+
+def fetch_taiwan_etf_master() -> pd.DataFrame:
+    """Download all exchange-listed ETFs from TWSE and TPEx official data.
+
+    TWSE publishes a dedicated fund master. TPEx's official closing-quote feed
+    contains both stocks and ETFs; Taiwan ETF security codes begin with ``00``,
+    while exchange-traded notes use a different ``02`` prefix and are excluded.
+    """
+    twse_raw = pd.DataFrame(_get_json(TWSE_FUND_API))
+    current_twse_codes = {
+        str(row.get("Code", "")).strip()
+        for row in _get_json(TWSE_DAILY_QUOTES_API)
+    }
+    twse_raw = twse_raw[
+        twse_raw["基金代號"].astype(str).str.strip().isin(current_twse_codes)
+    ].copy()
+    twse = pd.DataFrame(
+        {
+            "Code": twse_raw["基金代號"].astype(str).str.strip(),
+            "Name": twse_raw["基金簡稱"].astype(str).str.strip(),
+            "Full name": twse_raw["基金中文名稱"].astype(str).str.strip(),
+            "Fund type": twse_raw["基金類型"].astype(str).str.strip(),
+            "Issued shares": pd.to_numeric(
+                twse_raw["發行單位數/轉換數"], errors="coerce"
+            ),
+        }
+    )
+    twse["Market"] = "上市"
+    twse["Yahoo ticker"] = twse["Code"] + ".TW"
+
+    tpex_raw = pd.DataFrame(_get_json(TPEX_QUOTES_API))
+    tpex_raw["Code"] = tpex_raw["SecuritiesCompanyCode"].astype(str).str.strip()
+    tpex_raw = tpex_raw[tpex_raw["Code"].str.startswith("00")].copy()
+    tpex = pd.DataFrame(
+        {
+            "Code": tpex_raw["Code"],
+            "Name": tpex_raw["CompanyName"].astype(str).str.strip(),
+            "Full name": tpex_raw["CompanyName"].astype(str).str.strip(),
+            "Fund type": "",
+            "Issued shares": pd.to_numeric(tpex_raw["Capitals"], errors="coerce"),
+        }
+    )
+    tpex["Market"] = "上櫃"
+    tpex["Yahoo ticker"] = tpex["Code"] + ".TWO"
+
+    master = pd.concat([twse, tpex], ignore_index=True)
+    master["Industry code"] = "ETF"
+    master["Industry"] = [
+        _classify_etf(name, fund_type)
+        for name, fund_type in zip(master["Name"], master["Fund type"], strict=False)
+    ]
+    master["Asset type"] = "ETF"
+    return (
+        master[
+            [
+                "Code",
+                "Yahoo ticker",
+                "Name",
+                "Full name",
+                "Industry code",
+                "Issued shares",
+                "Market",
+                "Industry",
+                "Asset type",
+                "Fund type",
+            ]
+        ]
+        .drop_duplicates("Yahoo ticker")
+        .sort_values(["Market", "Industry", "Code"])
+        .reset_index(drop=True)
+    )
+
+
+def fetch_taiwan_security_master() -> pd.DataFrame:
+    """Return one complete master for listed/OTC companies and ETFs."""
+    companies = fetch_taiwan_company_master()
+    companies["Fund type"] = ""
+    etfs = fetch_taiwan_etf_master()
+    columns = list(etfs.columns)
+    return (
+        pd.concat([companies.reindex(columns=columns), etfs], ignore_index=True)
+        .drop_duplicates("Yahoo ticker")
+        .sort_values(["Asset type", "Market", "Industry", "Code"])
+        .reset_index(drop=True)
+    )
 
 
 def official_industry_groups(master: pd.DataFrame) -> list[str]:
@@ -168,15 +274,18 @@ def official_industry_groups(master: pd.DataFrame) -> list[str]:
 def assets_from_official_industries(
     master: pd.DataFrame,
     industries: list[str],
-    max_per_industry: int = 60,
+    max_per_industry: int | None = None,
 ) -> dict[str, AssetInfo]:
-    """Build industry universes, prioritizing companies with more issued shares."""
-    selected = master[master["Industry"].isin(industries)].copy()
-    selected = (
-        selected.sort_values(["Industry", "Issued shares"], ascending=[True, False])
-        .groupby("Industry", group_keys=False)
-        .head(max_per_industry)
+    """Build complete industry universes, optionally capped by issued shares."""
+    selected = master[
+        master["Industry"].isin(industries)
+        & master.get("Asset type", pd.Series("股票", index=master.index)).eq("股票")
+    ].copy()
+    selected = selected.sort_values(
+        ["Industry", "Issued shares"], ascending=[True, False]
     )
+    if max_per_industry is not None:
+        selected = selected.groupby("Industry", group_keys=False).head(max_per_industry)
     return {
         row["Yahoo ticker"]: AssetInfo(
             ticker=row["Yahoo ticker"],
@@ -220,6 +329,31 @@ def assets_from_taiwan_etfs(groups: list[str]) -> dict[str, AssetInfo]:
     return assets
 
 
+def assets_from_taiwan_security_master(
+    master: pd.DataFrame,
+    *,
+    markets: list[str] | None = None,
+    asset_types: list[str] | None = None,
+    groups: list[str] | None = None,
+) -> dict[str, AssetInfo]:
+    """Build an uncapped universe from the complete Taiwan security master."""
+    selected = master.copy()
+    if markets:
+        selected = selected[selected["Market"].isin(markets)]
+    if asset_types:
+        selected = selected[selected["Asset type"].isin(asset_types)]
+    if groups:
+        selected = selected[selected["Industry"].isin(groups)]
+    return {
+        row["Yahoo ticker"]: AssetInfo(
+            ticker=row["Yahoo ticker"],
+            name=f"{row['Name']} ({row['Market']}／{row['Asset type']})",
+            group=row["Industry"],
+        )
+        for _, row in selected.iterrows()
+    }
+
+
 def custom_taiwan_assets(
     raw_codes: list[str],
     master: pd.DataFrame,
@@ -242,7 +376,5 @@ def custom_taiwan_assets(
 
 
 def all_taiwan_research_assets(master: pd.DataFrame) -> dict[str, AssetInfo]:
-    """Return the union of curated Taiwan stocks and Taiwan-listed ETFs."""
-    stocks = assets_from_taiwan_themes(master, list(TW_THEME_CODES))
-    etfs = assets_from_taiwan_etfs(list(TW_ETF_GROUPS))
-    return {**stocks, **etfs}
+    """Return every listed/OTC stock and ETF in the supplied master."""
+    return assets_from_taiwan_security_master(master)
