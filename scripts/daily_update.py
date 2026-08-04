@@ -100,14 +100,16 @@ def main() -> None:
         institutional_flows,
         taiwan_master,
     )
+    taiwan_snapshot_dir = SNAPSHOT_ROOT / "tw"
+    taiwan_snapshot_dir.mkdir(parents=True, exist_ok=True)
     if not stock_flows.empty:
         stock_flows.to_csv(
-            SNAPSHOT_ROOT / "tw" / "latest-stock-fund-flow.csv",
+            taiwan_snapshot_dir / "latest-stock-fund-flow.csv",
             index=False,
         )
     if not industry_flows.empty:
         industry_flows.to_csv(
-            SNAPSHOT_ROOT / "tw" / "latest-industry-fund-flow.csv",
+            taiwan_snapshot_dir / "latest-industry-fund-flow.csv",
             index=False,
         )
     tw_written = build_rotation_snapshots(
