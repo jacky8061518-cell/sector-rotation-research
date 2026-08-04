@@ -1025,17 +1025,19 @@ elif front_flow_groups.empty:
     st.warning("法人資金流資料尚未就緒，請先執行每日更新。")
 else:
     st.markdown("#### 今日／本週／本月資金流入產業")
+    horizon_flow_results: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     horizon_columns = st.columns(3)
     for column, horizon in zip(
         horizon_columns,
         ["Daily", "Weekly", "Monthly"],
         strict=True,
     ):
-        _, horizon_groups = apply_flow_horizon(
+        horizon_securities, horizon_groups = apply_flow_horizon(
             base_flow_securities,
             base_flow_groups,
             horizon,
         )
+        horizon_flow_results[horizon] = (horizon_securities, horizon_groups)
         horizon_settings = FLOW_HORIZON_SETTINGS[horizon]
         positive_groups = horizon_groups[
             horizon_groups["Selected net value"] > 0
@@ -1058,6 +1060,104 @@ else:
                         for _, row in positive_groups.iloc[1:].iterrows()
                     )
                 )
+
+    st.markdown("#### 今日／本週／本月資金流向哪些股票")
+    st.caption(
+        "依三大法人估算淨買超金額排序；今日為最新交易日、本週為最近 5 個交易日、"
+        "本月為最近 20 個交易日。流入與流出分開列示。"
+    )
+    stock_horizon_tabs = st.tabs(["今日", "本週", "本月"])
+    for horizon_tab, horizon in zip(
+        stock_horizon_tabs,
+        ["Daily", "Weekly", "Monthly"],
+        strict=True,
+    ):
+        horizon_securities, _ = horizon_flow_results[horizon]
+        horizon_settings = FLOW_HORIZON_SETTINGS[horizon]
+        investor_columns = horizon_settings["investors"]
+
+        def stock_flow_view(frame: pd.DataFrame) -> pd.DataFrame:
+            view = frame.copy()
+            investor_values = view[list(investor_columns.values())].abs()
+            dominant_columns = investor_values.idxmax(axis=1)
+            investor_lookup = {
+                column_name: investor_name
+                for investor_name, column_name in investor_columns.items()
+            }
+            view["主導法人"] = dominant_columns.map(investor_lookup)
+            return pd.DataFrame(
+                {
+                    "股票": view["Ticker"],
+                    "名稱": view["Name"],
+                    "產業": view["Industry"].fillna("其他／未分類"),
+                    "法人淨流入（億）": view["Selected net value"] / 1e8,
+                    "外資（億）": view[investor_columns["外資"]] / 1e8,
+                    "投信（億）": view[investor_columns["投信"]] / 1e8,
+                    "自營商（億）": view[investor_columns["自營商"]] / 1e8,
+                    "主導法人": view["主導法人"],
+                    "同期報酬（%）": view["Selected return"] * 100,
+                    "資金分數": view["Flow score"],
+                    "階段": view["Stage"],
+                }
+            )
+
+        with horizon_tab:
+            positive_stocks = horizon_securities[
+                horizon_securities["Selected net value"] > 0
+            ].nlargest(10, "Selected net value")
+            negative_stocks = horizon_securities[
+                horizon_securities["Selected net value"] < 0
+            ].nsmallest(10, "Selected net value")
+            inflow_column, outflow_column = st.columns(2)
+            with inflow_column:
+                st.markdown(f"**{horizon_settings['label']}淨流入前 10 名**")
+                if positive_stocks.empty:
+                    st.info("目前沒有股票呈現法人淨流入。")
+                else:
+                    leader = positive_stocks.iloc[0]
+                    st.metric(
+                        f"{leader['Name']}（{leader['Ticker']}）",
+                        f"{leader['Selected net value'] / 1e8:+.1f} 億",
+                        str(leader.get("Industry", "其他／未分類")),
+                    )
+                    st.dataframe(
+                        stock_flow_view(positive_stocks),
+                        column_config={
+                            "法人淨流入（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "外資（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "投信（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "自營商（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "同期報酬（%）": st.column_config.NumberColumn(format="%.2f%%"),
+                            "資金分數": st.column_config.NumberColumn(format="%.1f"),
+                        },
+                        hide_index=True,
+                        width="stretch",
+                    )
+            with outflow_column:
+                st.markdown(f"**{horizon_settings['label']}淨流出前 10 名**")
+                if negative_stocks.empty:
+                    st.info("目前沒有股票呈現法人淨流出。")
+                else:
+                    leader = negative_stocks.iloc[0]
+                    st.metric(
+                        f"{leader['Name']}（{leader['Ticker']}）",
+                        f"{leader['Selected net value'] / 1e8:+.1f} 億",
+                        str(leader.get("Industry", "其他／未分類")),
+                        delta_color="inverse",
+                    )
+                    st.dataframe(
+                        stock_flow_view(negative_stocks),
+                        column_config={
+                            "法人淨流入（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "外資（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "投信（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "自營商（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "同期報酬（%）": st.column_config.NumberColumn(format="%.2f%%"),
+                            "資金分數": st.column_config.NumberColumn(format="%.1f"),
+                        },
+                        hide_index=True,
+                        width="stretch",
+                    )
 
     active_flow_settings = FLOW_HORIZON_SETTINGS[frequency]
     st.caption(
