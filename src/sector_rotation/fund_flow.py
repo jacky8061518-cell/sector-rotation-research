@@ -263,6 +263,7 @@ def calculate_fund_flow_signals(
     available_dates = sorted(pd.to_datetime(flows["Date"]).dt.normalize().unique())
     selected_dates = available_dates[-long_window:]
     short_dates = set(selected_dates[-short_window:])
+    daily_dates = {selected_dates[-1]}
     selected = flows[pd.to_datetime(flows["Date"]).dt.normalize().isin(selected_dates)].copy()
     selected = selected[selected["Ticker"].isin(prices.columns)]
     if selected.empty:
@@ -300,12 +301,33 @@ def calculate_fund_flow_signals(
         .groupby("Ticker")
         .agg(
             **{
+                "Foreign 5D value": ("Foreign net value", "sum"),
+                "Trust 5D value": ("Trust net value", "sum"),
+                "Dealer 5D value": ("Dealer net value", "sum"),
                 "5D net value": ("Total net value", "sum"),
                 "5D net shares": ("Total net shares", "sum"),
+                "Trust 5D shares": ("Trust net shares", "sum"),
             }
         )
     )
-    securities = long_agg.join(short_agg, how="left").fillna(0.0)
+    daily_agg = (
+        selected[selected["Date"].isin(daily_dates)]
+        .groupby("Ticker")
+        .agg(
+            **{
+                "Foreign 1D value": ("Foreign net value", "sum"),
+                "Trust 1D value": ("Trust net value", "sum"),
+                "Dealer 1D value": ("Dealer net value", "sum"),
+                "1D net value": ("Total net value", "sum"),
+                "1D net shares": ("Total net shares", "sum"),
+                "Trust 1D shares": ("Trust net shares", "sum"),
+            }
+        )
+    )
+    securities = long_agg.join(short_agg, how="left").join(
+        daily_agg,
+        how="left",
+    ).fillna(0.0)
 
     metadata = master.drop_duplicates("Yahoo ticker").set_index("Yahoo ticker")
     securities = securities.join(
@@ -319,9 +341,16 @@ def calculate_fund_flow_signals(
         * securities["Close"]
     )
     shares = pd.to_numeric(securities["Issued shares"], errors="coerce").replace(0, np.nan)
+    securities["1D flow intensity"] = securities["1D net shares"] / shares
     securities["5D flow intensity"] = securities["5D net shares"] / shares
     securities["20D flow intensity"] = securities["20D net shares"] / shares
+    securities["Trust 1D intensity"] = securities["Trust 1D shares"] / shares
+    securities["Trust 5D intensity"] = securities["Trust 5D shares"] / shares
     securities["Trust 20D intensity"] = securities["Trust 20D shares"] / shares
+    securities["1D return"] = prices.pct_change(1).iloc[-1].reindex(securities.index)
+    securities["5D return"] = prices.pct_change(short_window).iloc[-1].reindex(
+        securities.index
+    )
     securities["20D return"] = prices.pct_change(long_window).iloc[-1].reindex(
         securities.index
     )
@@ -335,19 +364,34 @@ def calculate_fund_flow_signals(
     groups = valid_groups.groupby("Industry").agg(
         Constituents=("Ticker", "nunique"),
         **{
+            "1D net value": ("1D net value", "sum"),
             "5D net value": ("5D net value", "sum"),
             "20D net value": ("20D net value", "sum"),
+            "Foreign 1D value": ("Foreign 1D value", "sum"),
+            "Trust 1D value": ("Trust 1D value", "sum"),
+            "Dealer 1D value": ("Dealer 1D value", "sum"),
+            "Foreign 5D value": ("Foreign 5D value", "sum"),
+            "Trust 5D value": ("Trust 5D value", "sum"),
+            "Dealer 5D value": ("Dealer 5D value", "sum"),
             "Foreign 20D value": ("Foreign 20D value", "sum"),
             "Trust 20D value": ("Trust 20D value", "sum"),
             "Dealer 20D value": ("Dealer 20D value", "sum"),
             "Market cap proxy": ("Market cap proxy", "sum"),
+            "1D return": ("1D return", "mean"),
+            "5D return": ("5D return", "mean"),
             "20D return": ("20D return", "mean"),
-            "Positive flow breadth": ("20D net value", lambda values: (values > 0).mean()),
+            "1D positive breadth": ("1D net value", lambda values: (values > 0).mean()),
+            "5D positive breadth": ("5D net value", lambda values: (values > 0).mean()),
+            "20D positive breadth": ("20D net value", lambda values: (values > 0).mean()),
         },
     )
+    groups["1D flow intensity"] = groups["1D net value"] / groups["Market cap proxy"]
     groups["5D flow intensity"] = groups["5D net value"] / groups["Market cap proxy"]
     groups["20D flow intensity"] = groups["20D net value"] / groups["Market cap proxy"]
+    groups["Trust 1D intensity"] = groups["Trust 1D value"] / groups["Market cap proxy"]
+    groups["Trust 5D intensity"] = groups["Trust 5D value"] / groups["Market cap proxy"]
     groups["Trust 20D intensity"] = groups["Trust 20D value"] / groups["Market cap proxy"]
+    groups["Positive flow breadth"] = groups["20D positive breadth"]
     group_weights = {
         "20D flow intensity": weights.get("20D flow intensity", 0),
         "5D flow intensity": weights.get("5D flow intensity", 0),
