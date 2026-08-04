@@ -76,7 +76,7 @@ FREQUENCY_SETTINGS = {
     },
 }
 
-DATA_PIPELINE_VERSION = "0.8.2-fast-fund-flow-tab"
+DATA_PIPELINE_VERSION = "0.9.0-multi-horizon-fund-flow"
 PROJECT_ROOT = Path(__file__).resolve().parent
 US_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "us" / "adjusted-prices.parquet"
 TAIWAN_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "adjusted-prices.parquet"
@@ -84,6 +84,57 @@ TAIWAN_FLOW_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "institution
 TAIWAN_SECURITY_MASTER_DATABASE = (
     PROJECT_ROOT / "data" / "databases" / "tw" / "security-master.csv"
 )
+
+FLOW_HORIZON_SETTINGS = {
+    "Daily": {
+        "label": "今日",
+        "period_label": "最新交易日",
+        "value": "1D net value",
+        "intensity": "1D flow intensity",
+        "trust": "Trust 1D intensity",
+        "return": "1D return",
+        "breadth": "1D positive breadth",
+        "confirmation": "5D flow intensity",
+        "confirmation_label": "近 5 日",
+        "investors": {
+            "外資": "Foreign 1D value",
+            "投信": "Trust 1D value",
+            "自營商": "Dealer 1D value",
+        },
+    },
+    "Weekly": {
+        "label": "本週",
+        "period_label": "最近 5 個交易日",
+        "value": "5D net value",
+        "intensity": "5D flow intensity",
+        "trust": "Trust 5D intensity",
+        "return": "5D return",
+        "breadth": "5D positive breadth",
+        "confirmation": "20D flow intensity",
+        "confirmation_label": "近 20 日",
+        "investors": {
+            "外資": "Foreign 5D value",
+            "投信": "Trust 5D value",
+            "自營商": "Dealer 5D value",
+        },
+    },
+    "Monthly": {
+        "label": "本月",
+        "period_label": "最近 20 個交易日",
+        "value": "20D net value",
+        "intensity": "20D flow intensity",
+        "trust": "Trust 20D intensity",
+        "return": "20D return",
+        "breadth": "20D positive breadth",
+        "confirmation": "5D flow intensity",
+        "confirmation_label": "近 5 日",
+        "investors": {
+            "外資": "Foreign 20D value",
+            "投信": "Trust 20D value",
+            "自營商": "Dealer 20D value",
+        },
+    },
+}
 
 
 st.set_page_config(
@@ -244,6 +295,134 @@ def format_percent(value: float) -> str:
 
 def format_number(value: float) -> str:
     return "—" if pd.isna(value) else f"{value:.2f}"
+
+
+def apply_flow_horizon(
+    securities: pd.DataFrame,
+    groups: pd.DataFrame,
+    frequency: str,
+    weights: dict[str, float] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Re-rank the same official flow data for day, week, or month horizons."""
+    if securities.empty or groups.empty:
+        return securities.copy(), groups.copy()
+    settings = FLOW_HORIZON_SETTINGS[frequency]
+    selected_weights = weights or {
+        settings["intensity"]: 55.0,
+        settings["confirmation"]: 20.0,
+        settings["trust"]: 15.0,
+        settings["return"]: 10.0,
+    }
+
+    def score(frame: pd.DataFrame) -> pd.Series:
+        result = pd.Series(0.0, index=frame.index)
+        total = sum(max(0.0, value) for value in selected_weights.values())
+        if total == 0:
+            return result
+        for column, weight in selected_weights.items():
+            if weight <= 0:
+                continue
+            result += (
+                frame[column]
+                .replace([np.inf, -np.inf], np.nan)
+                .rank(pct=True)
+                .fillna(0.5)
+                * weight
+            )
+        return 100 * result / total
+
+    securities = securities.copy()
+    groups = groups.copy()
+    for frame in (securities, groups):
+        frame["Flow score"] = score(frame)
+        frame["Selected net value"] = frame[settings["value"]]
+        frame["Selected flow intensity"] = frame[settings["intensity"]]
+        frame["Selected return"] = frame[settings["return"]]
+
+    groups["Positive flow breadth"] = groups[settings["breadth"]]
+    groups["Stage"] = np.select(
+        [
+            (groups["Selected net value"] > 0) & (groups["Selected return"] > 0),
+            groups["Selected net value"] > 0,
+            (groups["Selected net value"] <= 0) & (groups["Selected return"] > 0),
+        ],
+        [
+            "資金累積＋價格確認",
+            "資金累積、價格未確認",
+            "漲勢仍在、資金減速",
+        ],
+        default="資金撤出",
+    )
+    securities["Stage"] = np.select(
+        [
+            (securities["Selected net value"] > 0)
+            & (securities["Selected return"] > 0),
+            securities["Selected net value"] > 0,
+            (securities["Selected net value"] <= 0)
+            & (securities["Selected return"] > 0),
+        ],
+        [
+            "資金累積＋價格確認",
+            "資金累積、價格未確認",
+            "漲勢仍在、資金減速",
+        ],
+        default="資金撤出",
+    )
+
+    securities = securities.sort_values("Flow score", ascending=False)
+    leaders = (
+        securities.sort_values(
+            ["Industry", "Flow score"],
+            ascending=[True, False],
+        )
+        .dropna(subset=["Industry"])
+        .groupby("Industry")["Ticker"]
+        .apply(lambda values: "、".join(values.head(3)))
+    )
+    groups["Leading stocks"] = groups["Industry"].map(leaders)
+    concentration = (
+        securities.dropna(subset=["Industry"])
+        .assign(Absolute_selected_flow=lambda frame: frame["Selected net value"].abs())
+        .groupby("Industry")["Absolute_selected_flow"]
+        .apply(
+            lambda values: (
+                values.nlargest(3).sum() / values.sum()
+                if values.sum() > 0
+                else 0.0
+            )
+        )
+    )
+    groups["Top 3 concentration"] = groups["Industry"].map(concentration).fillna(0.0)
+
+    investor_columns = settings["investors"]
+    investor_values = groups[list(investor_columns.values())]
+    dominant_columns = investor_values.abs().idxmax(axis=1)
+    reverse_investors = {column: name for name, column in investor_columns.items()}
+    groups["Dominant investor"] = dominant_columns.map(reverse_investors)
+    groups["Dominant flow value"] = [
+        groups.loc[index, column]
+        for index, column in dominant_columns.items()
+    ]
+    groups["Flow reason"] = groups.apply(
+        lambda row: (
+            f"{settings['period_label']}三大法人估算淨流入 "
+            f"{row['Selected net value'] / 1e8:+.1f} 億；"
+            f"{row['Dominant investor']}為主導；"
+            f"產業內流入家數占 {row['Positive flow breadth']:.0%}；"
+            f"同期價格報酬 {row['Selected return']:+.1%}。"
+            f"主要帶動：{row['Leading stocks']}。"
+        ),
+        axis=1,
+    )
+    action_map = {
+        "資金累積＋價格確認": "優先研究領先股，分批而非追價",
+        "資金累積、價格未確認": "等待價格轉強與流入廣度擴大",
+        "漲勢仍在、資金減速": "不追價，提高停利或降低權重",
+        "資金撤出": "避免逆勢加碼，檢查既有部位風險",
+    }
+    groups["Research action"] = groups["Stage"].map(action_map)
+    groups = groups.sort_values("Flow score", ascending=False)
+    return securities, groups
 
 
 def performance_chart(
@@ -814,15 +993,22 @@ coverage_columns[3].metric("頻率", frequency_settings["label"])
 coverage_columns[4].metric("資料截止", f"{result.sampled_prices.index[-1]:%Y-%m-%d}")
 
 institutional_flows = pd.DataFrame()
+base_flow_securities = pd.DataFrame()
+base_flow_groups = pd.DataFrame()
 front_flow_securities = pd.DataFrame()
 front_flow_groups = pd.DataFrame()
 if market == "台股" and data_mode == "Live Yahoo Finance":
     institutional_flows = load_taiwan_institutional_flows(DATA_PIPELINE_VERSION)
     if not institutional_flows.empty:
-        front_flow_securities, front_flow_groups = calculate_fund_flow_signals(
+        base_flow_securities, base_flow_groups = calculate_fund_flow_signals(
             prices,
             institutional_flows,
             taiwan_master,
+        )
+        front_flow_securities, front_flow_groups = apply_flow_horizon(
+            base_flow_securities,
+            base_flow_groups,
+            frequency,
         )
 
 st.subheader("資金流主題總覽")
@@ -833,6 +1019,46 @@ elif data_mode != "Live Yahoo Finance":
 elif front_flow_groups.empty:
     st.warning("法人資金流資料尚未就緒，請先執行每日更新。")
 else:
+    st.markdown("#### 今日／本週／本月資金流入產業")
+    horizon_columns = st.columns(3)
+    for column, horizon in zip(
+        horizon_columns,
+        ["Daily", "Weekly", "Monthly"],
+        strict=True,
+    ):
+        _, horizon_groups = apply_flow_horizon(
+            base_flow_securities,
+            base_flow_groups,
+            horizon,
+        )
+        horizon_settings = FLOW_HORIZON_SETTINGS[horizon]
+        positive_groups = horizon_groups[
+            horizon_groups["Selected net value"] > 0
+        ].nlargest(3, "Selected net value")
+        with column:
+            st.markdown(f"**{horizon_settings['label']}**")
+            if positive_groups.empty:
+                st.metric("沒有產業呈現淨流入", "—")
+            else:
+                leader = positive_groups.iloc[0]
+                st.metric(
+                    leader["Industry"],
+                    f"{leader['Selected net value'] / 1e8:+.1f} 億",
+                    horizon_settings["period_label"],
+                )
+                st.caption(
+                    "其次："
+                    + "、".join(
+                        f"{row['Industry']} {row['Selected net value'] / 1e8:+.1f}億"
+                        for _, row in positive_groups.iloc[1:].iterrows()
+                    )
+                )
+
+    active_flow_settings = FLOW_HORIZON_SETTINGS[frequency]
+    st.caption(
+        f"目前選擇「{frequency_settings['label']}」，以下卡片與個股排名使用"
+        f"{active_flow_settings['period_label']}法人資金流重新排名。"
+    )
     front_focus = front_flow_groups[
         front_flow_groups["Stage"].isin(
             [
@@ -849,7 +1075,8 @@ else:
         front_cards[position].metric(
             row["Industry"],
             f"{row['Flow score']:.0f} / 100",
-            f"5日 {row['5D net value'] / 1e8:+.1f}億",
+            f"{active_flow_settings['label']} "
+            f"{row['Selected net value'] / 1e8:+.1f}億",
         )
     st.dataframe(
         front_focus[
@@ -1359,63 +1586,61 @@ with tab_flow:
                 "`.venv/bin/python scripts/daily_update.py` 後重新整理。"
             )
         else:
+            flow_settings = FLOW_HORIZON_SETTINGS[frequency]
+            st.info(
+                f"目前為「{frequency_settings['label']}資金流」："
+                f"使用{flow_settings['period_label']}三大法人資料排名。"
+                "切換左側日線／週線／月線後，本頁產業與公司會同步重排。"
+            )
             st.markdown("#### 自訂綜合資金分數")
             flow_controls = st.columns(4)
             flow_weights = {
-                "20D flow intensity": flow_controls[0].number_input(
-                    "20日法人流入權重",
+                flow_settings["intensity"]: flow_controls[0].number_input(
+                    f"{flow_settings['label']}法人流入權重",
                     min_value=0.0,
                     max_value=100.0,
-                    value=40.0,
+                    value=55.0,
                     step=5.0,
+                    key=f"flow_current_{frequency}",
                 ),
-                "5D flow intensity": flow_controls[1].number_input(
-                    "5日資金加速權重",
-                    min_value=0.0,
-                    max_value=100.0,
-                    value=30.0,
-                    step=5.0,
-                ),
-                "Trust 20D intensity": flow_controls[2].number_input(
-                    "20日投信流入權重",
+                flow_settings["confirmation"]: flow_controls[1].number_input(
+                    f"{flow_settings['confirmation_label']}趨勢確認權重",
                     min_value=0.0,
                     max_value=100.0,
                     value=20.0,
                     step=5.0,
+                    key=f"flow_confirmation_{frequency}",
                 ),
-                "20D return": flow_controls[3].number_input(
-                    "20日價格確認權重",
+                flow_settings["trust"]: flow_controls[2].number_input(
+                    f"{flow_settings['label']}投信流入權重",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=15.0,
+                    step=5.0,
+                    key=f"flow_trust_{frequency}",
+                ),
+                flow_settings["return"]: flow_controls[3].number_input(
+                    f"{flow_settings['label']}價格確認權重",
                     min_value=0.0,
                     max_value=100.0,
                     value=10.0,
                     step=5.0,
+                    key=f"flow_price_{frequency}",
                 ),
             }
-            default_flow_weights = {
-                "20D flow intensity": 40.0,
-                "5D flow intensity": 30.0,
-                "Trust 20D intensity": 20.0,
-                "20D return": 10.0,
-            }
-            if flow_weights == default_flow_weights:
-                # The same default result was already calculated for the
-                # fund-flow summary cards above; do not repeat it for 2,000+
-                # securities.
-                flow_securities = front_flow_securities
-                flow_groups = front_flow_groups
-            else:
-                flow_securities, flow_groups = calculate_fund_flow_signals(
-                    prices,
-                    institutional_flows,
-                    taiwan_master,
-                    weights=flow_weights,
-                )
+            flow_securities, flow_groups = apply_flow_horizon(
+                base_flow_securities,
+                base_flow_groups,
+                frequency,
+                flow_weights,
+            )
             if flow_securities.empty or flow_groups.empty:
                 st.warning("目前選取標的與法人資料沒有足夠重疊，請擴大研究範圍。")
             else:
                 flow_date = pd.Timestamp(flow_securities["Signal date"].max())
                 st.caption(
                     f"法人資料截止：{flow_date:%Y-%m-%d}｜"
+                    f"目前統計：{flow_settings['period_label']}｜"
                     "綜合分數採橫斷面百分位，100 代表目前相對最強。"
                 )
                 actionable = flow_groups[
@@ -1434,7 +1659,8 @@ with tab_flow:
                     flow_cards[position].metric(
                         row["Industry"],
                         f"{row['Flow score']:.0f} / 100",
-                        f"5日 {row['5D net value'] / 1e8:+.1f}億",
+                        f"{flow_settings['label']} "
+                        f"{row['Selected net value'] / 1e8:+.1f}億",
                     )
 
                 daily_group_flows = calculate_daily_group_flows(
@@ -1444,12 +1670,8 @@ with tab_flow:
                 )
 
                 st.markdown("#### 法人資金流向圖")
-                top_flow_groups = flow_groups.nlargest(8, "20D net value")
-                investor_links = [
-                    ("外資", "Foreign 20D value"),
-                    ("投信", "Trust 20D value"),
-                    ("自營商", "Dealer 20D value"),
-                ]
+                top_flow_groups = flow_groups.nlargest(8, "Selected net value")
+                investor_links = list(flow_settings["investors"].items())
                 sankey_nodes = [name for name, _ in investor_links] + list(
                     top_flow_groups["Industry"]
                 )
@@ -1482,7 +1704,10 @@ with tab_flow:
                     )
                 )
                 sankey.update_layout(
-                    title="外資／投信／自營商 → 20日淨流入最高產業",
+                    title=(
+                        "外資／投信／自營商 → "
+                        f"{flow_settings['period_label']}淨流入最高產業"
+                    ),
                     height=520,
                 )
                 st.plotly_chart(sankey, width="stretch")
@@ -1490,23 +1715,31 @@ with tab_flow:
                 st.markdown("#### 產業資金流四象限")
                 flow_scatter = px.scatter(
                     flow_groups,
-                    x="20D flow intensity",
-                    y="5D flow intensity",
+                    x="Selected flow intensity",
+                    y="Selected return",
                     size="Constituents",
                     color="Stage",
                     hover_name="Industry",
                     hover_data={
                         "Flow score": ":.1f",
-                        "20D return": ":.1%",
+                        "Selected net value": ":,.0f",
                         "Positive flow breadth": ":.0%",
                         "Leading stocks": True,
                     },
-                    title="右上：中期流入且短期加速｜左下：資金持續撤出",
+                    title=(
+                        f"{flow_settings['period_label']}："
+                        "右上為資金流入＋價格上漲，左下為資金流出＋價格下跌"
+                    ),
                 )
                 flow_scatter.add_vline(x=0, line_dash="dot", line_color="#94a3b8")
                 flow_scatter.add_hline(y=0, line_dash="dot", line_color="#94a3b8")
-                flow_scatter.update_xaxes(title="20日法人淨流入／市值代理")
-                flow_scatter.update_yaxes(title="5日法人淨流入／市值代理")
+                flow_scatter.update_xaxes(
+                    title=f"{flow_settings['label']}法人淨流入／市值代理"
+                )
+                flow_scatter.update_yaxes(
+                    title=f"{flow_settings['label']}產業平均報酬",
+                    tickformat=".1%",
+                )
                 flow_scatter.update_layout(height=610)
                 st.plotly_chart(flow_scatter, width="stretch")
 
@@ -1519,11 +1752,17 @@ with tab_flow:
                     key="fund_flow_radar_groups",
                 )
                 radar_metrics = {
-                    "20日流入": flow_groups["20D flow intensity"].rank(pct=True) * 100,
-                    "5日加速": flow_groups["Flow acceleration"].rank(pct=True) * 100,
-                    "投信認同": flow_groups["Trust 20D intensity"].rank(pct=True) * 100,
+                    f"{flow_settings['label']}流入": (
+                        flow_groups[flow_settings["intensity"]].rank(pct=True) * 100
+                    ),
+                    f"{flow_settings['confirmation_label']}確認": (
+                        flow_groups[flow_settings["confirmation"]].rank(pct=True) * 100
+                    ),
+                    "投信認同": (
+                        flow_groups[flow_settings["trust"]].rank(pct=True) * 100
+                    ),
                     "流入廣度": flow_groups["Positive flow breadth"] * 100,
-                    "價格確認": flow_groups["20D return"].rank(pct=True) * 100,
+                    "價格確認": flow_groups["Selected return"].rank(pct=True) * 100,
                 }
                 radar_frame = pd.DataFrame(radar_metrics, index=flow_groups.index)
                 radar_figure = go.Figure()
@@ -1581,11 +1820,7 @@ with tab_flow:
 
                 st.markdown("#### 法人結構熱圖")
                 heat_groups = flow_groups.head(18).set_index("Industry")[
-                    [
-                        "Foreign 20D value",
-                        "Trust 20D value",
-                        "Dealer 20D value",
-                    ]
+                    list(flow_settings["investors"].values())
                 ] / 1e8
                 heat_groups.columns = ["外資", "投信", "自營商"]
                 investor_heatmap = px.imshow(
@@ -1594,8 +1829,11 @@ with tab_flow:
                     color_continuous_scale="RdBu",
                     color_continuous_midpoint=0,
                     text_auto=".1f",
-                    labels={"color": "20日淨流入（億）"},
-                    title="誰在買、誰在賣：前18名產業法人分項",
+                    labels={"color": f"{flow_settings['label']}淨流入（億）"},
+                    title=(
+                        f"誰在買、誰在賣：{flow_settings['period_label']}"
+                        "前18名產業法人分項"
+                    ),
                 )
                 investor_heatmap.update_layout(height=620)
                 st.plotly_chart(investor_heatmap, width="stretch")
@@ -1605,15 +1843,13 @@ with tab_flow:
                         "Industry",
                         "Stage",
                         "Flow score",
+                        "Selected net value",
+                        "1D net value",
                         "5D net value",
                         "20D net value",
-                        "Foreign 20D value",
-                        "Trust 20D value",
-                        "Dealer 20D value",
                         "Positive flow breadth",
-                        "Flow acceleration",
                         "Top 3 concentration",
-                        "20D return",
+                        "Selected return",
                         "Leading stocks",
                         "Dominant investor",
                         "Flow reason",
@@ -1621,27 +1857,23 @@ with tab_flow:
                     ]
                 ].copy()
                 for column in [
+                    "Selected net value",
+                    "1D net value",
                     "5D net value",
                     "20D net value",
-                    "Foreign 20D value",
-                    "Trust 20D value",
-                    "Dealer 20D value",
-                    "Flow acceleration",
                 ]:
                     group_display[column] /= 1e8
                 st.dataframe(
                     group_display.style.format(
                         {
                             "Flow score": "{:.1f}",
+                            "Selected net value": "{:+.1f} 億",
+                            "1D net value": "{:+.1f} 億",
                             "5D net value": "{:+.1f} 億",
                             "20D net value": "{:+.1f} 億",
-                            "Foreign 20D value": "{:+.1f} 億",
-                            "Trust 20D value": "{:+.1f} 億",
-                            "Dealer 20D value": "{:+.1f} 億",
                             "Positive flow breadth": "{:.0%}",
-                            "Flow acceleration": "{:+.1f} 億",
                             "Top 3 concentration": "{:.0%}",
-                            "20D return": "{:+.1%}",
+                            "Selected return": "{:+.1%}",
                         }
                     ),
                     width="stretch",
@@ -1708,20 +1940,18 @@ with tab_flow:
                         "Asset type",
                         "Stage",
                         "Flow score",
+                        "Selected net value",
+                        "1D net value",
                         "5D net value",
                         "20D net value",
-                        "Foreign 20D value",
-                        "Trust 20D value",
-                        "Dealer 20D value",
-                        "20D return",
+                        "Selected return",
                     ]
                 ].head(100).copy()
                 for column in [
+                    "Selected net value",
+                    "1D net value",
                     "5D net value",
                     "20D net value",
-                    "Foreign 20D value",
-                    "Trust 20D value",
-                    "Dealer 20D value",
                 ]:
                     stock_display[column] /= 1e8
                 st.markdown("#### 個股資金流排名（前 100）")
@@ -1729,12 +1959,11 @@ with tab_flow:
                     stock_display.style.format(
                         {
                             "Flow score": "{:.1f}",
+                            "Selected net value": "{:+.2f} 億",
+                            "1D net value": "{:+.2f} 億",
                             "5D net value": "{:+.2f} 億",
                             "20D net value": "{:+.2f} 億",
-                            "Foreign 20D value": "{:+.2f} 億",
-                            "Trust 20D value": "{:+.2f} 億",
-                            "Dealer 20D value": "{:+.2f} 億",
-                            "20D return": "{:+.1%}",
+                            "Selected return": "{:+.1%}",
                         }
                     ),
                     width="stretch",
