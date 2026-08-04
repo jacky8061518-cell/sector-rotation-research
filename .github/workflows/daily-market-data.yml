@@ -1,0 +1,65 @@
+name: Daily Taiwan market-data update
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Taiwan exchanges close at 05:30 UTC. Allow time for official files and
+    # Yahoo's adjusted prices to settle before rebuilding the bundled cache.
+    - cron: "30 07 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-market-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh prices, institutional flows, and snapshots
+        run: python scripts/daily_update.py
+
+      - name: Verify refreshed Taiwan data
+        run: |
+          python - <<'PY'
+          import pandas as pd
+
+          prices = pd.read_parquet("data/databases/tw/adjusted-prices.parquet")
+          flows = pd.read_parquet("data/databases/tw/institutional-flows.parquet")
+          price_date = pd.to_datetime(prices.index).max().normalize()
+          flow_date = pd.to_datetime(flows["Date"]).max().normalize()
+          if (price_date - flow_date).days > 7:
+              raise SystemExit(
+                  f"Institutional-flow cache is stale: prices={price_date:%Y-%m-%d}, "
+                  f"flows={flow_date:%Y-%m-%d}"
+              )
+          print(f"Taiwan prices through {price_date:%Y-%m-%d}")
+          print(f"Taiwan institutional flows through {flow_date:%Y-%m-%d}")
+          PY
+
+      - name: Commit refreshed database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/databases data/snapshots
+          if git diff --cached --quiet; then
+            echo "No market-data changes"
+          else
+            git commit -m "Update daily Taiwan market data"
+            git push
+          fi
