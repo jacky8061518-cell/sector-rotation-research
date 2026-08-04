@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import importlib
 import os
 from pathlib import Path
 import re
@@ -17,10 +18,7 @@ from sector_rotation.data import (
     generate_demo_prices,
     load_cached_or_download_prices,
 )
-from sector_rotation.fund_flow import (
-    calculate_daily_group_flows,
-    calculate_fund_flow_signals,
-)
+import sector_rotation.fund_flow as fund_flow_module
 from sector_rotation.holdings import analyze_holding_leadership, fetch_top_holdings
 from sector_rotation.metrics import benchmark_returns, drawdown, equity_curve, performance_summary
 from sector_rotation.rrg import (
@@ -53,6 +51,13 @@ from sector_rotation.universe import (
     custom_assets,
     groups_for,
 )
+
+# Streamlit may hot-reload app.py without re-importing an already-loaded helper
+# module.  Reload the flow engine so a deployed schema upgrade (for example the
+# new 1D/5D/20D columns) cannot keep using the previous in-memory implementation.
+fund_flow_module = importlib.reload(fund_flow_module)
+calculate_daily_group_flows = fund_flow_module.calculate_daily_group_flows
+calculate_fund_flow_signals = fund_flow_module.calculate_fund_flow_signals
 
 
 FREQUENCY_SETTINGS = {
