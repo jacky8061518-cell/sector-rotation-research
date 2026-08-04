@@ -330,8 +330,14 @@ def calculate_fund_flow_signals(
     ).fillna(0.0)
 
     metadata = master.drop_duplicates("Yahoo ticker").set_index("Yahoo ticker")
+    metadata_columns = ["Industry", "Asset type", "Issued shares"]
+    metadata_columns.extend(
+        column
+        for column in ["Detailed industry", "Investment theme", "Supply-chain role"]
+        if column in metadata.columns
+    )
     securities = securities.join(
-        metadata[["Industry", "Asset type", "Issued shares"]],
+        metadata[metadata_columns],
         how="left",
     )
     latest_close = prices.ffill().iloc[-1]
