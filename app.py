@@ -37,6 +37,7 @@ from sector_rotation.taiwan import (
     TW_BENCHMARK,
     TW_DEFENSIVE_ASSET,
     TW_THEME_CODES,
+    add_taiwan_research_taxonomy,
     assets_from_official_industries,
     assets_from_taiwan_security_master,
     assets_from_taiwan_themes,
@@ -217,10 +218,10 @@ def load_taiwan_security_master() -> pd.DataFrame:
                 dtype={"Code": "string", "Industry code": "string"},
             )
             if not master.empty:
-                return master
+                return add_taiwan_research_taxonomy(master)
         except (OSError, ValueError, pd.errors.ParserError):
             pass
-    return fetch_taiwan_security_master()
+    return add_taiwan_research_taxonomy(fetch_taiwan_security_master())
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1089,7 +1090,10 @@ else:
                 {
                     "股票": view["Ticker"],
                     "名稱": view["Name"],
-                    "產業": view["Industry"].fillna("其他／未分類"),
+                    "大產業": view["Industry"].fillna("其他／未分類"),
+                    "細分產業": view["Detailed industry"].fillna("待進一步分類"),
+                    "投資主題": view["Investment theme"].fillna("待進一步分類"),
+                    "供應鏈角色": view["Supply-chain role"].fillna("待進一步分類"),
                     "法人淨流入（億）": view["Selected net value"] / 1e8,
                     "外資（億）": view[investor_columns["外資"]] / 1e8,
                     "投信（億）": view[investor_columns["投信"]] / 1e8,
@@ -1102,6 +1106,56 @@ else:
             )
 
         with horizon_tab:
+            theme_source = horizon_securities[
+                horizon_securities["Asset type"].eq("股票")
+            ].copy()
+            theme_summary = (
+                theme_source.groupby("Investment theme", dropna=False)
+                .agg(
+                    **{
+                        "法人淨流入（億）": ("Selected net value", lambda values: values.sum() / 1e8),
+                        "流入股票數": ("Selected net value", lambda values: int((values > 0).sum())),
+                        "股票數": ("Ticker", "nunique"),
+                    }
+                )
+                .reset_index()
+                .rename(columns={"Investment theme": "投資主題"})
+            )
+            theme_leaders = (
+                theme_source.sort_values("Selected net value", ascending=False)
+                .groupby("Investment theme", dropna=False)["Name"]
+                .apply(lambda values: "、".join(values.head(3)))
+            )
+            theme_summary["主要帶動股票"] = theme_summary["投資主題"].map(theme_leaders)
+            theme_summary["流入廣度"] = (
+                theme_summary["流入股票數"] / theme_summary["股票數"].replace(0, np.nan)
+            )
+            positive_theme_total = theme_summary["法人淨流入（億）"].clip(lower=0).sum()
+            theme_summary["正流入占比"] = (
+                theme_summary["法人淨流入（億）"].clip(lower=0) / positive_theme_total
+                if positive_theme_total > 0
+                else 0.0
+            )
+            top_themes = theme_summary.nlargest(10, "法人淨流入（億）")
+            st.markdown(f"**{horizon_settings['label']}細分投資主題資金流前 10 名**")
+            st.dataframe(
+                top_themes[
+                    [
+                        "投資主題",
+                        "法人淨流入（億）",
+                        "正流入占比",
+                        "流入廣度",
+                        "主要帶動股票",
+                    ]
+                ],
+                column_config={
+                    "法人淨流入（億）": st.column_config.NumberColumn(format="%+.2f"),
+                    "正流入占比": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=1),
+                    "流入廣度": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=1),
+                },
+                hide_index=True,
+                width="stretch",
+            )
             positive_stocks = horizon_securities[
                 horizon_securities["Selected net value"] > 0
             ].nlargest(10, "Selected net value")
@@ -1118,7 +1172,12 @@ else:
                     st.metric(
                         f"{leader['Name']}（{leader['Ticker']}）",
                         f"{leader['Selected net value'] / 1e8:+.1f} 億",
-                        str(leader.get("Industry", "其他／未分類")),
+                        "｜".join(
+                            [
+                                str(leader.get("Detailed industry", "待進一步分類")),
+                                str(leader.get("Supply-chain role", "待進一步分類")),
+                            ]
+                        ),
                     )
                     st.dataframe(
                         stock_flow_view(positive_stocks),
@@ -1142,7 +1201,12 @@ else:
                     st.metric(
                         f"{leader['Name']}（{leader['Ticker']}）",
                         f"{leader['Selected net value'] / 1e8:+.1f} 億",
-                        str(leader.get("Industry", "其他／未分類")),
+                        "｜".join(
+                            [
+                                str(leader.get("Detailed industry", "待進一步分類")),
+                                str(leader.get("Supply-chain role", "待進一步分類")),
+                            ]
+                        ),
                         delta_color="inverse",
                     )
                     st.dataframe(
