@@ -12,7 +12,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from sector_rotation.config import BENCHMARK, DEFENSIVE_ASSET
-from sector_rotation.data import download_adjusted_prices, generate_demo_prices
+from sector_rotation.data import (
+    download_adjusted_prices,
+    generate_demo_prices,
+    load_cached_or_download_prices,
+)
 from sector_rotation.fund_flow import (
     calculate_daily_group_flows,
     calculate_fund_flow_signals,
@@ -72,8 +76,9 @@ FREQUENCY_SETTINGS = {
     },
 }
 
-DATA_PIPELINE_VERSION = "0.8.0-fund-flow-first"
+DATA_PIPELINE_VERSION = "0.8.1-resilient-bundled-cache"
 PROJECT_ROOT = Path(__file__).resolve().parent
+US_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "us" / "adjusted-prices.parquet"
 TAIWAN_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "adjusted-prices.parquet"
 TAIWAN_FLOW_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "institutional-flows.parquet"
 
@@ -108,7 +113,12 @@ def load_live_data(
     pipeline_version: str,
 ) -> pd.DataFrame:
     del pipeline_version  # Deliberately part of the Streamlit cache key.
-    return download_adjusted_prices(list(tickers), start, end)
+    return load_cached_or_download_prices(
+        US_PRICE_DATABASE,
+        list(tickers),
+        start,
+        end,
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -150,26 +160,14 @@ def load_taiwan_price_database(
     end: date,
     pipeline_version: str,
 ) -> pd.DataFrame:
-    """Read the daily-refreshed Taiwan database and fetch only cache misses."""
+    """Read the bundled Taiwan database and fetch only cache misses."""
     del pipeline_version
-    cached = pd.DataFrame()
-    if TAIWAN_PRICE_DATABASE.exists():
-        cached = pd.read_parquet(TAIWAN_PRICE_DATABASE)
-        cached.index = pd.to_datetime(cached.index)
-        cached = cached.loc[pd.Timestamp(start) : pd.Timestamp(end)]
-        cached = cached.reindex(columns=[ticker for ticker in tickers if ticker in cached])
-
-    missing = [
-        ticker
-        for ticker in tickers
-        if ticker not in cached or cached[ticker].notna().sum() == 0
-    ]
-    fresh = pd.DataFrame()
-    if missing:
-        fresh = download_adjusted_prices(missing, start, end + timedelta(days=1))
-    prices = pd.concat([cached, fresh], axis=1)
-    prices = prices.loc[:, ~prices.columns.duplicated(keep="last")]
-    return prices.reindex(columns=tickers).dropna(how="all").ffill()
+    return load_cached_or_download_prices(
+        TAIWAN_PRICE_DATABASE,
+        list(tickers),
+        start,
+        end,
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -410,10 +408,10 @@ with st.sidebar:
     market = st.segmented_control(
         "市場資料庫",
         ["美股", "台股"],
-        default="美股",
+        default="台股",
     )
     if market is None:
-        market = "美股"
+        market = "台股"
 
     data_mode = st.radio(
         "資料來源",
@@ -655,7 +653,7 @@ try:
                 prices = load_taiwan_price_database(
                     download_tickers,
                     start_date,
-                    end_date,
+                    end_date + timedelta(days=1),
                     DATA_PIPELINE_VERSION,
                 )
             else:
