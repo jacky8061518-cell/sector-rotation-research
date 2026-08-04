@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -142,6 +144,72 @@ def download_adjusted_prices(
     prices = prices.loc[:, usable]
     if prices.empty:
         raise RuntimeError("No ticker has enough usable observations.")
+    return repair_taiwan_price_discontinuities(prices)
+
+
+def load_cached_or_download_prices(
+    cache_path: Path,
+    tickers: list[str],
+    start: date,
+    end: date,
+    min_observations: int = 30,
+    *,
+    downloader: Callable[..., pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    """Load bundled prices first and download only uncovered tickers.
+
+    Streamlit Community Cloud can be temporarily rate-limited by Yahoo.  A
+    checked-in research database therefore remains the authoritative fallback:
+    a failed supplemental request must not take the entire application down.
+    ``end`` follows Yahoo's exclusive-boundary convention.
+    """
+    if end <= start:
+        raise ValueError("The end date must be later than the start date.")
+    if min_observations <= 0:
+        raise ValueError("min_observations must be positive.")
+
+    requested = list(dict.fromkeys(tickers))
+    cached = pd.DataFrame()
+    if cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        cached.index = pd.to_datetime(cached.index)
+        cached = cached.loc[
+            (cached.index >= pd.Timestamp(start))
+            & (cached.index < pd.Timestamp(end))
+        ]
+        cached = cached.reindex(columns=requested)
+
+    missing = [
+        ticker
+        for ticker in requested
+        if ticker not in cached or cached[ticker].notna().sum() < min_observations
+    ]
+    fresh = pd.DataFrame()
+    download = downloader or download_adjusted_prices
+    if missing:
+        try:
+            fresh = download(
+                missing,
+                start,
+                end,
+                min_observations=min_observations,
+                batch_size=25,
+            )
+        except Exception:
+            # The bundled database is intentionally allowed to carry the app
+            # through a transient vendor outage or rate limit.
+            fresh = pd.DataFrame()
+
+    prices = pd.concat([cached, fresh], axis=1)
+    prices = prices.loc[:, ~prices.columns.duplicated(keep="last")]
+    prices = prices.reindex(columns=requested).dropna(how="all").ffill()
+    usable = prices.columns[prices.notna().sum() >= min_observations]
+    prices = prices.loc[:, usable]
+    if prices.empty:
+        raise RuntimeError(
+            "No ticker has enough usable observations in the bundled database "
+            "or the live data source."
+        )
     return repair_taiwan_price_discontinuities(prices)
 
 
