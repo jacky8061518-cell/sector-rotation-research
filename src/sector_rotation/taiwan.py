@@ -113,6 +113,90 @@ TW_THEME_CODES: dict[str, list[str]] = {
     "鋼鐵塑化與原物料": ["2002", "2014", "2027", "2031", "1301", "1303", "1326"],
 }
 
+# A research taxonomy below the exchange's broad industry labels.  The exchange
+# classification remains the source of truth for the first level; this curated
+# layer describes the product/theme and the company's usual supply-chain role.
+TW_THEME_TAXONOMY: dict[str, tuple[str, str, str]] = {
+    "晶圓製造": ("晶圓代工", "晶圓製造", "晶圓製造"),
+    "IC設計": ("IC 設計", "半導體 IC 設計", "晶片設計"),
+    "封裝測試": ("半導體封裝測試", "先進封裝／測試", "封裝與測試"),
+    "半導體設備與材料": ("半導體設備與材料", "半導體資本支出", "設備／材料供應"),
+    "AI伺服器與ODM": ("AI 伺服器", "AI 資料中心", "ODM／系統組裝"),
+    "散熱與電源": ("AI 電源與散熱", "AI 資料中心", "電源／散熱零組件"),
+    "PCB與銅箔基板": ("PCB／IC 載板", "高速運算載板", "PCB／載板供應"),
+    "網通與高速傳輸": ("網通與高速傳輸", "AI 網路基礎建設", "交換器／高速傳輸"),
+    "光學與光通訊": ("光學與光通訊", "矽光子／高速光通訊", "光學元件／模組"),
+    "記憶體與儲存": ("記憶體與儲存", "記憶體", "DRAM／Flash／控制晶片"),
+    "金融控股": ("金融控股", "金融股", "銀行／保險／證券"),
+    "航運與航空": ("航運與航空", "運價循環", "海運／航空運輸"),
+    "生技製藥": ("生技製藥", "新藥／醫療", "藥品／醫療產品"),
+    "電動車零組件": ("電動車零組件", "電動車", "車用零組件"),
+    "重電與綠能": ("重電與綠能", "電網升級／能源轉型", "重電／能源設備"),
+    "軍工與無人機": ("軍工與無人機", "國防自主", "航太／無人機零組件"),
+    "營建資產": ("營建與資產", "營建資產", "開發／營造"),
+    "消費與零售": ("消費與零售", "內需消費", "品牌／通路"),
+    "鋼鐵塑化與原物料": ("鋼鐵塑化原物料", "原物料循環", "上游原料供應"),
+}
+
+# Company-specific overrides make the highest-impact names more precise than a
+# shared theme bucket.  Codes not listed here still inherit TW_THEME_TAXONOMY.
+TW_COMPANY_TAXONOMY: dict[str, tuple[str, str, str]] = {
+    "2330": ("晶圓代工", "先進製程／AI 晶片", "先進晶圓製造"),
+    "2303": ("晶圓代工", "成熟製程", "成熟製程晶圓製造"),
+    "2408": ("DRAM 記憶體", "記憶體", "DRAM 製造"),
+    "2344": ("DRAM 記憶體", "記憶體", "DRAM 製造"),
+    "2337": ("Flash／NOR 記憶體", "記憶體", "Flash 記憶體製造"),
+    "8299": ("記憶體控制晶片", "記憶體", "控制晶片／儲存方案"),
+    "3260": ("記憶體模組", "記憶體", "模組／通路"),
+    "3231": ("AI 伺服器", "AI 資料中心", "ODM／系統組裝"),
+    "2382": ("AI 伺服器", "AI 資料中心", "ODM／系統組裝"),
+    "2317": ("AI 伺服器", "AI 資料中心", "EMS／系統組裝"),
+    "6669": ("伺服器主機板", "AI 資料中心", "伺服器 ODM"),
+    "2356": ("AI 伺服器", "AI 資料中心", "ODM／系統組裝"),
+    "2376": ("伺服器主機板", "AI 資料中心", "主機板／系統"),
+    "2324": ("伺服器與電腦", "AI 資料中心", "ODM／系統組裝"),
+    "2301": ("AI 電源供應", "AI 資料中心", "電源供應器／光電元件"),
+    "2308": ("資料中心電源與散熱", "AI 資料中心", "電源管理／散熱"),
+    "3017": ("伺服器散熱", "AI 資料中心", "散熱模組"),
+    "3324": ("伺服器散熱", "AI 資料中心", "散熱模組"),
+    "3653": ("伺服器散熱零組件", "AI 資料中心", "均熱／散熱零組件"),
+    "3037": ("ABF／IC 載板", "高速運算載板", "IC 載板"),
+    "3189": ("ABF／IC 載板", "高速運算載板", "IC 載板"),
+    "2454": ("手機／邊緣 AI 晶片", "AI 終端／IC 設計", "SoC 晶片設計"),
+    "3443": ("ASIC 設計服務", "AI ASIC", "ASIC 設計服務"),
+    "3711": ("半導體封裝測試", "先進封裝", "封裝／測試"),
+}
+
+
+def add_taiwan_research_taxonomy(master: pd.DataFrame) -> pd.DataFrame:
+    """Attach detailed product, investment-theme, and supply-chain labels."""
+    result = master.copy()
+    code_taxonomy: dict[str, tuple[str, str, str]] = {}
+    for theme, codes in TW_THEME_CODES.items():
+        taxonomy = TW_THEME_TAXONOMY[theme]
+        for code in codes:
+            code_taxonomy.setdefault(code, taxonomy)
+    code_taxonomy.update(TW_COMPANY_TAXONOMY)
+
+    fallback = result.get("Industry", pd.Series("其他／未分類", index=result.index))
+    result["Detailed industry"] = fallback
+    result["Investment theme"] = fallback
+    result["Supply-chain role"] = "待進一步分類"
+    for index, row in result.iterrows():
+        code = str(row.get("Code", "")).strip()
+        asset_type = str(row.get("Asset type", "股票"))
+        if asset_type == "ETF":
+            result.at[index, "Detailed industry"] = str(row.get("Industry", "ETF"))
+            result.at[index, "Investment theme"] = str(row.get("Industry", "ETF"))
+            result.at[index, "Supply-chain role"] = "ETF 投資工具"
+            continue
+        if code in code_taxonomy:
+            detailed, theme, role = code_taxonomy[code]
+            result.at[index, "Detailed industry"] = detailed
+            result.at[index, "Investment theme"] = theme
+            result.at[index, "Supply-chain role"] = role
+    return result
+
 
 def _get_json(url: str) -> list[dict[str, str]]:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 rotation-research/0.4"})
@@ -259,12 +343,13 @@ def fetch_taiwan_security_master() -> pd.DataFrame:
     companies["Fund type"] = ""
     etfs = fetch_taiwan_etf_master()
     columns = list(etfs.columns)
-    return (
+    master = (
         pd.concat([companies.reindex(columns=columns), etfs], ignore_index=True)
         .drop_duplicates("Yahoo ticker")
         .sort_values(["Asset type", "Market", "Industry", "Code"])
         .reset_index(drop=True)
     )
+    return add_taiwan_research_taxonomy(master)
 
 
 def official_industry_groups(master: pd.DataFrame) -> list[str]:
