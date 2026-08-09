@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .data import repair_taiwan_price_discontinuities
+
 
 @dataclass(frozen=True)
 class FlowStrategyConfig:
@@ -19,6 +21,8 @@ class FlowStrategyConfig:
     new_high_window: int = 60
     require_above_ma: bool = True
     transaction_cost_bps: float = 10.0
+    exit_mode: str = "Moving average"
+    liquidate_each_week: bool = False
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -29,6 +33,8 @@ class FlowStrategyConfig:
             raise ValueError("new_high_window must exceed one session.")
         if self.entry_mode not in {"Weekly top inflow", "New high + inflow"}:
             raise ValueError(f"Unknown entry mode: {self.entry_mode}")
+        if self.exit_mode not in {"Moving average", "Weekly rebalance"}:
+            raise ValueError(f"Unknown exit mode: {self.exit_mode}")
         if self.transaction_cost_bps < 0:
             raise ValueError("transaction costs cannot be negative.")
 
@@ -58,7 +64,13 @@ def estimate_daily_security_flow(
     """Estimate daily institutional cash flow as net shares times close."""
     if prices.empty or flows.empty:
         return pd.DataFrame()
-    price_data = prices.sort_index().copy()
+    price_data = repair_taiwan_price_discontinuities(
+        prices.sort_index().copy(),
+        # Taiwan's normal daily price limit is about 10%. A 12% guard leaves
+        # rounding room while removing split/capital-action unit breaks that
+        # would otherwise be counted as investable returns.
+        threshold=0.12,
+    )
     price_data.index = pd.to_datetime(price_data.index).tz_localize(None).normalize()
     selected = flows.copy()
     selected["Date"] = pd.to_datetime(selected["Date"]).dt.tz_localize(None).dt.normalize()
@@ -106,7 +118,10 @@ def run_weekly_flow_strategy(
     """
     if prices.empty or flows.empty:
         raise ValueError("prices and institutional flows are required.")
-    price_data = prices.sort_index().copy()
+    price_data = repair_taiwan_price_discontinuities(
+        prices.sort_index().copy(),
+        threshold=0.12,
+    )
     price_data.index = pd.to_datetime(price_data.index).tz_localize(None).normalize()
     daily_flow = estimate_daily_security_flow(price_data, flows)
     if daily_flow.empty:
@@ -190,6 +205,7 @@ def run_weekly_flow_strategy(
     tickers = list(strategy_prices.columns)
     target = pd.DataFrame(0.0, index=index, columns=tickers)
     actions: list[dict[str, object]] = []
+    forced_weekly_turnover: dict[pd.Timestamp, float] = {}
     current_target = pd.Series(0.0, index=tickers)
     for position, timestamp in enumerate(index):
         if timestamp in weekly_selections:
@@ -197,9 +213,21 @@ def run_weekly_flow_strategy(
             new_target = pd.Series(0.0, index=tickers)
             if selected:
                 new_target.loc[selected] = 1.0 / len(selected)
-            removed = current_target[current_target > 0].index.difference(selected)
-            added = pd.Index(selected).difference(current_target[current_target > 0].index)
             execution_date = index[min(position + 1, len(index) - 1)]
+            old_holdings = current_target[current_target > 0].index
+            if config.liquidate_each_week and len(old_holdings):
+                removed = old_holdings
+                added = pd.Index(selected)
+                forced_weekly_turnover[execution_date] = (
+                    float(current_target.sum()) + float(new_target.sum())
+                ) / 2
+                sell_action = "賣出（週一全部換股）"
+                sell_reason = "固定持有一週後全部賣出"
+            else:
+                removed = old_holdings.difference(selected)
+                added = pd.Index(selected).difference(old_holdings)
+                sell_action = "賣出（週調整）"
+                sell_reason = "退出本週前五"
             actions.extend(
                 {
                     "Signal date": timestamp,
@@ -215,15 +243,15 @@ def run_weekly_flow_strategy(
                     "Signal date": timestamp,
                     "Execution date": execution_date,
                     "Ticker": ticker,
-                    "Action": "賣出（週調整）",
-                    "Reason": "退出本週前五",
+                    "Action": sell_action,
+                    "Reason": sell_reason,
                 }
                 for ticker in removed
             )
             current_target = new_target
 
         held = current_target[current_target > 0].index
-        if len(held):
+        if config.exit_mode == "Moving average" and len(held):
             below = strategy_prices.loc[timestamp, held] < moving_average.loc[timestamp, held]
             exits = list(below[below.fillna(False)].index)
             if exits:
@@ -253,6 +281,9 @@ def run_weekly_flow_strategy(
         deployed.diff().abs().sum(axis=1).fillna(0.0)
         + (cash - prior_cash).abs()
     ) / 2
+    for execution_date, forced_value in forced_weekly_turnover.items():
+        if execution_date in turnover.index:
+            turnover.loc[execution_date] = max(turnover.loc[execution_date], forced_value)
     net = gross - turnover * config.transaction_cost_bps / 10_000
 
     trade_log = pd.DataFrame(actions)
@@ -308,7 +339,7 @@ def run_weekly_flow_strategy(
         current_holdings[
             current_holdings["Close"] < current_holdings[f"MA{config.ma_window}"]
         ].copy()
-        if not current_holdings.empty
+        if config.exit_mode == "Moving average" and not current_holdings.empty
         else pd.DataFrame()
     )
 
