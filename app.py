@@ -19,6 +19,7 @@ from sector_rotation.data import (
     load_cached_or_download_prices,
 )
 import sector_rotation.fund_flow as fund_flow_module
+from sector_rotation.flow_strategy import FlowStrategyConfig, run_weekly_flow_strategy
 from sector_rotation.holdings import analyze_holding_leadership, fetch_top_holdings
 from sector_rotation.metrics import benchmark_returns, drawdown, equity_curve, performance_summary
 from sector_rotation.rrg import (
@@ -1281,6 +1282,7 @@ else:
 
 (
     tab_flow,
+    tab_flow_strategy,
     tab_overview,
     tab_attention,
     tab_rankings,
@@ -1290,6 +1292,7 @@ else:
 ) = st.tabs(
     [
         "資金流雷達",
+        "資金流策略",
         "績效",
         "關注與主要玩家",
         "詳細排名",
@@ -1306,6 +1309,318 @@ with tab_flow:
     flow_loading_status = st.info(
         "正在建立資金流雷達…首次載入完整市場約需數秒，完成後會自動顯示。"
     )
+
+with tab_flow_strategy:
+    st.markdown("### 每週法人資金流前五策略")
+    st.caption(
+        "每週最後交易日選股，下一交易日才開始計入報酬；持股收盤跌破日均線後，"
+        "下一交易日出場並保留現金，避免使用尚未知道的訊號。"
+    )
+    if market != "台股" or data_mode != "Live Yahoo Finance":
+        st.info("此策略需要台股交易所三大法人資料，請選擇台股與 Live Yahoo Finance。")
+    elif institutional_flows.empty:
+        st.warning("法人資料庫尚未就緒，無法建立資金流策略。")
+    else:
+        strategy_controls = st.columns(6)
+        flow_strategy_top_n = int(
+            strategy_controls[0].number_input(
+                "每週買入前 N 名",
+                min_value=1,
+                max_value=10,
+                value=5,
+                step=1,
+                key="flow_strategy_top_n",
+            )
+        )
+        flow_strategy_ma = int(
+            strategy_controls[1].number_input(
+                "跌破幾日線出場",
+                min_value=3,
+                max_value=60,
+                value=10,
+                step=1,
+                key="flow_strategy_ma",
+            )
+        )
+        entry_label = strategy_controls[2].selectbox(
+            "進場模式",
+            ["週資金流入前 N 名", "創新高＋資金流入"],
+            key="flow_strategy_entry_mode",
+        )
+        flow_strategy_new_high = int(
+            strategy_controls[3].number_input(
+                "新高觀察日數",
+                min_value=20,
+                max_value=252,
+                value=60,
+                step=10,
+                disabled=entry_label != "創新高＋資金流入",
+                key="flow_strategy_new_high",
+            )
+        )
+        flow_strategy_cost = float(
+            strategy_controls[4].number_input(
+                "單邊交易成本（bps）",
+                min_value=0.0,
+                max_value=100.0,
+                value=10.0,
+                step=1.0,
+                key="flow_strategy_cost",
+            )
+        )
+        flow_strategy_above_ma = strategy_controls[5].toggle(
+            "進場須站上均線",
+            value=True,
+            key="flow_strategy_above_ma",
+        )
+        flow_strategy_config = FlowStrategyConfig(
+            top_n=flow_strategy_top_n,
+            flow_window=5,
+            ma_window=flow_strategy_ma,
+            entry_mode=(
+                "New high + inflow"
+                if entry_label == "創新高＋資金流入"
+                else "Weekly top inflow"
+            ),
+            new_high_window=flow_strategy_new_high,
+            require_above_ma=flow_strategy_above_ma,
+            transaction_cost_bps=flow_strategy_cost,
+        )
+        try:
+            with st.spinner("正在執行每週資金流策略與日線出場模擬…"):
+                strategy_stock_tickers = set(
+                    taiwan_master.loc[
+                        taiwan_master["Asset type"].eq("股票"),
+                        "Yahoo ticker",
+                    ]
+                )
+                strategy_prices = prices.reindex(
+                    columns=[
+                        ticker for ticker in prices.columns if ticker in strategy_stock_tickers
+                    ]
+                )
+                flow_strategy_result = run_weekly_flow_strategy(
+                    strategy_prices,
+                    institutional_flows,
+                    taiwan_master,
+                    flow_strategy_config,
+                )
+        except Exception as exc:
+            st.error(f"資金流策略計算失敗：{exc}")
+        else:
+            flow_dates = pd.to_datetime(institutional_flows["Date"])
+            sample_sessions = int(flow_dates.dt.normalize().nunique())
+            sample_weeks = int(
+                flow_strategy_result.weekly_rankings["Signal date"].nunique()
+                if not flow_strategy_result.weekly_rankings.empty
+                else 0
+            )
+            strategy_stats = performance_summary(
+                flow_strategy_result.net_returns,
+                252,
+            )
+            cumulative_flow_return = (
+                float(equity_curve(flow_strategy_result.net_returns).iloc[-1] - 1)
+                if not flow_strategy_result.net_returns.empty
+                else float("nan")
+            )
+            cash_weight = (
+                1.0 - float(flow_strategy_result.current_holdings["Target weight"].sum())
+                if not flow_strategy_result.current_holdings.empty
+                else 1.0
+            )
+            flow_metric_cards = st.columns(6)
+            flow_metric_cards[0].metric("法人樣本", f"{sample_sessions} 日")
+            flow_metric_cards[1].metric("完成週訊號", f"{sample_weeks} 週")
+            flow_metric_cards[2].metric("策略累計報酬", format_percent(cumulative_flow_return))
+            flow_metric_cards[3].metric(
+                "最大回撤",
+                format_percent(strategy_stats["Max drawdown"]),
+            )
+            flow_metric_cards[4].metric("目前持股", len(flow_strategy_result.current_holdings))
+            flow_metric_cards[5].metric("現金比重", format_percent(cash_weight))
+            if sample_sessions < 252:
+                st.warning(
+                    f"目前法人歷史只有 {sample_sessions} 個交易日；這是策略試跑與訊號驗證，"
+                    "不足以評估長期勝率、Sharpe 或跨市場循環表現。資料每天累積後，"
+                    "回測期間會自動延長。"
+                )
+
+            st.markdown("#### 本週預計買入名單")
+            candidates = flow_strategy_result.latest_candidates.copy()
+            if candidates.empty:
+                st.info("本週沒有符合正流入、均線及新高條件的股票，策略保留現金。")
+            else:
+                candidate_columns = [
+                    "Strategy rank",
+                    "Rank",
+                    "Ticker",
+                    "Name",
+                    "Detailed industry",
+                    "Investment theme",
+                    "Supply-chain role",
+                    "Weekly flow value",
+                    "Close",
+                    "MA",
+                    "New high",
+                    "Selected",
+                ]
+                candidate_view = candidates[
+                    [column for column in candidate_columns if column in candidates]
+                ].rename(
+                    columns={
+                        "Strategy rank": "選股順位",
+                        "Rank": "原始資金排名",
+                        "Ticker": "股票",
+                        "Name": "名稱",
+                        "Detailed industry": "細分產業",
+                        "Investment theme": "投資主題",
+                        "Supply-chain role": "供應鏈角色",
+                        "Weekly flow value": "5日法人淨流入（億）",
+                        "Close": "收盤價",
+                        "MA": f"MA{flow_strategy_ma}",
+                        "New high": f"創{flow_strategy_new_high}日新高",
+                        "Selected": "本週選入",
+                    }
+                )
+                candidate_view["5日法人淨流入（億）"] /= 1e8
+                st.dataframe(
+                    candidate_view,
+                    column_config={
+                        "5日法人淨流入（億）": st.column_config.NumberColumn(format="%+.2f"),
+                        "收盤價": st.column_config.NumberColumn(format="%.2f"),
+                        f"MA{flow_strategy_ma}": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                    hide_index=True,
+                    width="stretch",
+                )
+
+            holding_column, outflow_column = st.columns(2)
+            with holding_column:
+                st.markdown("#### 目前策略持股與10日線距離")
+                holdings = flow_strategy_result.current_holdings.copy()
+                if holdings.empty:
+                    st.info("策略目前持有現金。")
+                else:
+                    holding_view = holdings.rename(
+                        columns={
+                            "Ticker": "股票",
+                            "Name": "名稱",
+                            "Detailed industry": "細分產業",
+                            "Investment theme": "投資主題",
+                            "Supply-chain role": "供應鏈角色",
+                            "Target weight": "目標權重（%）",
+                            "Close": "收盤價",
+                            "Distance to MA": "距離均線（%）",
+                        }
+                    )
+                    holding_view["目標權重（%）"] *= 100
+                    holding_view["距離均線（%）"] *= 100
+                    st.dataframe(
+                        holding_view,
+                        column_config={
+                            "目標權重（%）": st.column_config.NumberColumn(format="%.1f%%"),
+                            "收盤價": st.column_config.NumberColumn(format="%.2f"),
+                            "距離均線（%）": st.column_config.NumberColumn(format="%+.2f%%"),
+                        },
+                        hide_index=True,
+                        width="stretch",
+                    )
+            with outflow_column:
+                st.markdown("#### 本週法人淨流出最多股票")
+                outflows = flow_strategy_result.latest_outflows.copy()
+                if outflows.empty:
+                    st.info("目前沒有可用的週流出排名。")
+                else:
+                    outflow_view = outflows[
+                        [
+                            column
+                            for column in [
+                                "Ticker",
+                                "Name",
+                                "Detailed industry",
+                                "Investment theme",
+                                "Weekly flow value",
+                                "Close",
+                            ]
+                            if column in outflows
+                        ]
+                    ].rename(
+                        columns={
+                            "Ticker": "股票",
+                            "Name": "名稱",
+                            "Detailed industry": "細分產業",
+                            "Investment theme": "投資主題",
+                            "Weekly flow value": "5日法人淨流入（億）",
+                            "Close": "收盤價",
+                        }
+                    )
+                    outflow_view["5日法人淨流入（億）"] /= 1e8
+                    st.dataframe(
+                        outflow_view,
+                        column_config={
+                            "5日法人淨流入（億）": st.column_config.NumberColumn(format="%+.2f"),
+                            "收盤價": st.column_config.NumberColumn(format="%.2f"),
+                        },
+                        hide_index=True,
+                        width="stretch",
+                    )
+
+            st.markdown("#### 策略淨值與回撤")
+            flow_equity = equity_curve(flow_strategy_result.net_returns)
+            flow_drawdown = drawdown(flow_strategy_result.net_returns)
+            strategy_chart = go.Figure()
+            strategy_chart.add_trace(
+                go.Scatter(
+                    x=flow_equity.index,
+                    y=(flow_equity - 1) * 100,
+                    name="資金流策略累計報酬",
+                    line={"color": "#38bdf8", "width": 3},
+                )
+            )
+            strategy_chart.add_trace(
+                go.Scatter(
+                    x=flow_drawdown.index,
+                    y=flow_drawdown * 100,
+                    name="回撤",
+                    yaxis="y2",
+                    fill="tozeroy",
+                    line={"color": "#fb7185"},
+                    opacity=0.35,
+                )
+            )
+            strategy_chart.update_layout(
+                height=430,
+                hovermode="x unified",
+                yaxis={"title": "累計報酬（%）"},
+                yaxis2={
+                    "title": "回撤（%）",
+                    "overlaying": "y",
+                    "side": "right",
+                    "showgrid": False,
+                },
+                legend={"orientation": "h"},
+            )
+            st.plotly_chart(strategy_chart, width="stretch")
+
+            st.markdown("#### 交易與出場紀錄")
+            if flow_strategy_result.trade_log.empty:
+                st.info("目前尚未產生交易紀錄。")
+            else:
+                st.dataframe(
+                    flow_strategy_result.trade_log.sort_values(
+                        ["Signal date", "Ticker"],
+                        ascending=[False, True],
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                    height=420,
+                )
+            st.info(
+                "策略定義：週末收盤計算最近5日法人淨流入，下一交易日買入前N名；"
+                f"任一持股收盤跌破MA{flow_strategy_ma}，下一交易日出場。"
+                "此頁是研究與模擬，不會送出真實委託。"
+            )
 
 with tab_overview:
     metric_columns = st.columns(5)
