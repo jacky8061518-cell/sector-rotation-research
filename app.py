@@ -17,6 +17,7 @@ from sector_rotation.data import (
     download_adjusted_prices,
     generate_demo_prices,
     load_cached_or_download_prices,
+    repair_taiwan_price_discontinuities,
 )
 import sector_rotation.fund_flow as fund_flow_module
 from sector_rotation.flow_strategy import FlowStrategyConfig, run_weekly_flow_strategy
@@ -1311,17 +1312,17 @@ with tab_flow:
     )
 
 with tab_flow_strategy:
-    st.markdown("### 每週法人資金流前五策略")
+    st.markdown("### 每週一換股：法人資金流前五策略")
     st.caption(
-        "每週最後交易日選股，下一交易日才開始計入報酬；持股收盤跌破日均線後，"
-        "下一交易日出場並保留現金，避免使用尚未知道的訊號。"
+        "每週五或該週最後交易日收盤後，計算最近 5 個交易日法人淨流入；"
+        "下一個交易日（通常是週一）賣出舊持股並等權買進新前五名，固定持有一週。"
     )
     if market != "台股" or data_mode != "Live Yahoo Finance":
         st.info("此策略需要台股交易所三大法人資料，請選擇台股與 Live Yahoo Finance。")
     elif institutional_flows.empty:
         st.warning("法人資料庫尚未就緒，無法建立資金流策略。")
     else:
-        strategy_controls = st.columns(6)
+        strategy_controls = st.columns(5)
         flow_strategy_top_n = int(
             strategy_controls[0].number_input(
                 "每週買入前 N 名",
@@ -1332,34 +1333,18 @@ with tab_flow_strategy:
                 key="flow_strategy_top_n",
             )
         )
-        flow_strategy_ma = int(
-            strategy_controls[1].number_input(
-                "跌破幾日線出場",
-                min_value=3,
-                max_value=60,
-                value=10,
-                step=1,
-                key="flow_strategy_ma",
-            )
+        flow_strategy_period = strategy_controls[1].selectbox(
+            "回測期間",
+            ["近 1 年", "全部可用資料"],
+            key="flow_strategy_period",
         )
         entry_label = strategy_controls[2].selectbox(
             "進場模式",
             ["週資金流入前 N 名", "創新高＋資金流入"],
             key="flow_strategy_entry_mode",
         )
-        flow_strategy_new_high = int(
-            strategy_controls[3].number_input(
-                "新高觀察日數",
-                min_value=20,
-                max_value=252,
-                value=60,
-                step=10,
-                disabled=entry_label != "創新高＋資金流入",
-                key="flow_strategy_new_high",
-            )
-        )
         flow_strategy_cost = float(
-            strategy_controls[4].number_input(
+            strategy_controls[3].number_input(
                 "單邊交易成本（bps）",
                 min_value=0.0,
                 max_value=100.0,
@@ -1368,10 +1353,43 @@ with tab_flow_strategy:
                 key="flow_strategy_cost",
             )
         )
-        flow_strategy_above_ma = strategy_controls[5].toggle(
-            "進場須站上均線",
+        liquidate_each_week = strategy_controls[4].toggle(
+            "每週先全部賣出再買入",
             value=True,
+            key="flow_strategy_full_liquidation",
+        )
+        exit_controls = st.columns(4)
+        flow_strategy_exit_label = exit_controls[0].selectbox(
+            "出場規則",
+            ["固定持有一週", "跌破均線提前出場"],
+            key="flow_strategy_exit_mode",
+        )
+        flow_strategy_ma = int(
+            exit_controls[1].number_input(
+                "提前出場均線",
+                min_value=3,
+                max_value=60,
+                value=10,
+                step=1,
+                disabled=flow_strategy_exit_label == "固定持有一週",
+                key="flow_strategy_ma",
+            )
+        )
+        flow_strategy_above_ma = exit_controls[2].toggle(
+            "進場須站上均線",
+            value=False,
             key="flow_strategy_above_ma",
+        )
+        flow_strategy_new_high = int(
+            exit_controls[3].number_input(
+                "新高觀察日數",
+                min_value=20,
+                max_value=252,
+                value=60,
+                step=10,
+                disabled=entry_label != "創新高＋資金流入",
+                key="flow_strategy_new_high",
+            )
         )
         flow_strategy_config = FlowStrategyConfig(
             top_n=flow_strategy_top_n,
@@ -1385,9 +1403,22 @@ with tab_flow_strategy:
             new_high_window=flow_strategy_new_high,
             require_above_ma=flow_strategy_above_ma,
             transaction_cost_bps=flow_strategy_cost,
+            exit_mode=(
+                "Weekly rebalance"
+                if flow_strategy_exit_label == "固定持有一週"
+                else "Moving average"
+            ),
+            liquidate_each_week=liquidate_each_week,
         )
         try:
-            with st.spinner("正在執行每週資金流策略與日線出場模擬…"):
+            with st.spinner("正在執行每週一換股法人資金流回測…"):
+                strategy_flows = institutional_flows.copy()
+                strategy_flows["Date"] = pd.to_datetime(strategy_flows["Date"])
+                if flow_strategy_period == "近 1 年":
+                    latest_flow_date = strategy_flows["Date"].max()
+                    strategy_flows = strategy_flows[
+                        strategy_flows["Date"] > latest_flow_date - pd.DateOffset(years=1)
+                    ]
                 strategy_stock_tickers = set(
                     taiwan_master.loc[
                         taiwan_master["Asset type"].eq("股票"),
@@ -1401,49 +1432,94 @@ with tab_flow_strategy:
                 )
                 flow_strategy_result = run_weekly_flow_strategy(
                     strategy_prices,
-                    institutional_flows,
+                    strategy_flows,
                     taiwan_master,
                     flow_strategy_config,
                 )
         except Exception as exc:
             st.error(f"資金流策略計算失敗：{exc}")
         else:
-            flow_dates = pd.to_datetime(institutional_flows["Date"])
+            flow_dates = pd.to_datetime(strategy_flows["Date"])
             sample_sessions = int(flow_dates.dt.normalize().nunique())
             sample_weeks = int(
                 flow_strategy_result.weekly_rankings["Signal date"].nunique()
                 if not flow_strategy_result.weekly_rankings.empty
                 else 0
             )
-            strategy_stats = performance_summary(
-                flow_strategy_result.net_returns,
-                252,
+            nonzero_turnover = flow_strategy_result.turnover[
+                flow_strategy_result.turnover > 0
+            ]
+            active_start = (
+                nonzero_turnover.index.min()
+                if not nonzero_turnover.empty
+                else flow_strategy_result.net_returns.index.min()
             )
+            analysis_returns = flow_strategy_result.net_returns.loc[active_start:]
+            strategy_stats = performance_summary(analysis_returns, 252)
             cumulative_flow_return = (
-                float(equity_curve(flow_strategy_result.net_returns).iloc[-1] - 1)
-                if not flow_strategy_result.net_returns.empty
+                float(equity_curve(analysis_returns).iloc[-1] - 1)
+                if not analysis_returns.empty
                 else float("nan")
+            )
+            benchmark_weekly_returns = pd.Series(0.0, index=analysis_returns.index)
+            if "0050.TW" in prices:
+                benchmark_weekly_returns = (
+                    repair_taiwan_price_discontinuities(
+                        prices[["0050.TW"]], threshold=0.12
+                    )["0050.TW"]
+                    .reindex(analysis_returns.index)
+                    .ffill()
+                    .pct_change(fill_method=None)
+                    .fillna(0.0)
+                )
+            benchmark_cumulative_return = (
+                float(equity_curve(benchmark_weekly_returns).iloc[-1] - 1)
+                if not benchmark_weekly_returns.empty
+                else float("nan")
+            )
+            strategy_weekly_returns = (
+                (1 + analysis_returns).resample("W-FRI").prod() - 1
+            )
+            benchmark_by_week = (
+                (1 + benchmark_weekly_returns).resample("W-FRI").prod() - 1
+            )
+            completed_week_returns = strategy_weekly_returns.iloc[:-1]
+            weekly_win_rate = (
+                float((completed_week_returns > 0).mean())
+                if not completed_week_returns.empty
+                else float("nan")
+            )
+            elapsed_years = max(len(analysis_returns) / 252, 1 / 252)
+            annual_turnover = float(
+                flow_strategy_result.turnover.loc[analysis_returns.index].sum()
+                / elapsed_years
             )
             cash_weight = (
                 1.0 - float(flow_strategy_result.current_holdings["Target weight"].sum())
                 if not flow_strategy_result.current_holdings.empty
                 else 1.0
             )
-            flow_metric_cards = st.columns(6)
-            flow_metric_cards[0].metric("法人樣本", f"{sample_sessions} 日")
+            flow_metric_cards = st.columns(7)
+            flow_metric_cards[0].metric("實際回測", f"{len(analysis_returns)} 日")
             flow_metric_cards[1].metric("完成週訊號", f"{sample_weeks} 週")
-            flow_metric_cards[2].metric("策略累計報酬", format_percent(cumulative_flow_return))
-            flow_metric_cards[3].metric(
+            flow_metric_cards[2].metric("策略總報酬", format_percent(cumulative_flow_return))
+            flow_metric_cards[3].metric("0050 同期", format_percent(benchmark_cumulative_return))
+            flow_metric_cards[4].metric("週勝率", format_percent(weekly_win_rate))
+            flow_metric_cards[5].metric(
                 "最大回撤",
                 format_percent(strategy_stats["Max drawdown"]),
             )
-            flow_metric_cards[4].metric("目前持股", len(flow_strategy_result.current_holdings))
-            flow_metric_cards[5].metric("現金比重", format_percent(cash_weight))
-            if sample_sessions < 252:
+            flow_metric_cards[6].metric("年化換手", f"{annual_turnover:.1f}x")
+            if sample_sessions < 240:
                 st.warning(
-                    f"目前法人歷史只有 {sample_sessions} 個交易日；這是策略試跑與訊號驗證，"
-                    "不足以評估長期勝率、Sharpe 或跨市場循環表現。資料每天累積後，"
-                    "回測期間會自動延長。"
+                    f"目前官方法人資料只有 {sample_sessions} 個交易日，尚未達一個交易年；"
+                    "上方結果只代表現有期間，不能標示為一年績效。系統已設定回補一年資料，"
+                    "完成後會自動顯示約 52 週回測。"
+                )
+            else:
+                st.success(
+                    f"本次使用 {flow_dates.min():%Y-%m-%d} 至 {flow_dates.max():%Y-%m-%d} "
+                    f"共 {sample_sessions} 個法人交易日，完成一年週輪替回測。"
                 )
 
             st.markdown("#### 本週預計買入名單")
@@ -1497,7 +1573,14 @@ with tab_flow_strategy:
 
             holding_column, outflow_column = st.columns(2)
             with holding_column:
-                st.markdown("#### 目前策略持股與10日線距離")
+                st.markdown(
+                    "#### 目前策略持股"
+                    + (
+                        f"與{flow_strategy_ma}日線距離"
+                        if flow_strategy_exit_label == "跌破均線提前出場"
+                        else "（持有至下次週一換股）"
+                    )
+                )
                 holdings = flow_strategy_result.current_holdings.copy()
                 if holdings.empty:
                     st.info("策略目前持有現金。")
@@ -1567,8 +1650,9 @@ with tab_flow_strategy:
                     )
 
             st.markdown("#### 策略淨值與回撤")
-            flow_equity = equity_curve(flow_strategy_result.net_returns)
-            flow_drawdown = drawdown(flow_strategy_result.net_returns)
+            flow_equity = equity_curve(analysis_returns)
+            benchmark_equity = equity_curve(benchmark_weekly_returns)
+            flow_drawdown = drawdown(analysis_returns)
             strategy_chart = go.Figure()
             strategy_chart.add_trace(
                 go.Scatter(
@@ -1576,6 +1660,14 @@ with tab_flow_strategy:
                     y=(flow_equity - 1) * 100,
                     name="資金流策略累計報酬",
                     line={"color": "#38bdf8", "width": 3},
+                )
+            )
+            strategy_chart.add_trace(
+                go.Scatter(
+                    x=benchmark_equity.index,
+                    y=(benchmark_equity - 1) * 100,
+                    name="0050 同期累計報酬",
+                    line={"color": "#f59e0b", "width": 2},
                 )
             )
             strategy_chart.add_trace(
@@ -1603,6 +1695,34 @@ with tab_flow_strategy:
             )
             st.plotly_chart(strategy_chart, width="stretch")
 
+            st.markdown("#### 每週報酬明細")
+            weekly_performance = pd.DataFrame(
+                {
+                    "週結束日": strategy_weekly_returns.index,
+                    "策略報酬（%）": strategy_weekly_returns.to_numpy() * 100,
+                    "0050 報酬（%）": benchmark_by_week.reindex(
+                        strategy_weekly_returns.index
+                    ).to_numpy()
+                    * 100,
+                }
+            )
+            weekly_performance["超額報酬（%）"] = (
+                weekly_performance["策略報酬（%）"]
+                - weekly_performance["0050 報酬（%）"]
+            )
+            st.dataframe(
+                weekly_performance.sort_values("週結束日", ascending=False),
+                column_config={
+                    "週結束日": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                    "策略報酬（%）": st.column_config.NumberColumn(format="%+.2f%%"),
+                    "0050 報酬（%）": st.column_config.NumberColumn(format="%+.2f%%"),
+                    "超額報酬（%）": st.column_config.NumberColumn(format="%+.2f%%"),
+                },
+                hide_index=True,
+                width="stretch",
+                height=360,
+            )
+
             st.markdown("#### 交易與出場紀錄")
             if flow_strategy_result.trade_log.empty:
                 st.info("目前尚未產生交易紀錄。")
@@ -1617,8 +1737,14 @@ with tab_flow_strategy:
                     height=420,
                 )
             st.info(
-                "策略定義：週末收盤計算最近5日法人淨流入，下一交易日買入前N名；"
-                f"任一持股收盤跌破MA{flow_strategy_ma}，下一交易日出場。"
+                "策略定義：每週最後交易日收盤後計算最近5日法人淨流入，"
+                "下一交易日（通常週一）賣出舊部位並等權買進前N名，固定持有至下週換股。"
+                + (
+                    f"若持股提前跌破MA{flow_strategy_ma}，則下一交易日先出場。"
+                    if flow_strategy_exit_label == "跌破均線提前出場"
+                    else ""
+                )
+                +
                 "此頁是研究與模擬，不會送出真實委託。"
             )
 
