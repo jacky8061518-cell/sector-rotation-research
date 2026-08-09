@@ -93,7 +93,9 @@ def main() -> None:
     coverage.to_csv(taiwan_database_dir / "coverage-report.csv", index=False)
     institutional_flows = update_institutional_flow_cache(
         taiwan_database_dir / "institutional-flows.parquet",
-        tw_prices.index[-30:],
+        # Keep at least one full trading year so the weekly flow strategy can
+        # be evaluated across roughly 52 independent rebalance observations.
+        tw_prices.index[-270:],
     )
     stock_flows, industry_flows = calculate_fund_flow_signals(
         tw_prices,
