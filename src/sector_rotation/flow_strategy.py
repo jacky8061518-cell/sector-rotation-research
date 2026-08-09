@@ -118,11 +118,20 @@ def run_weekly_flow_strategy(
     """
     if prices.empty or flows.empty:
         raise ValueError("prices and institutional flows are required.")
-    price_data = repair_taiwan_price_discontinuities(
-        prices.sort_index().copy(),
-        threshold=0.12,
-    )
+    price_data = prices.sort_index().copy()
     price_data.index = pd.to_datetime(price_data.index).tz_localize(None).normalize()
+    flow_start = pd.to_datetime(flows["Date"]).dt.tz_localize(None).dt.normalize().min()
+    # Only the selected flow period plus indicator warm-up is needed. Repairing
+    # every ticker back to 2012 makes a one-year cloud backtest unnecessarily
+    # expensive without changing any signal or return in the requested period.
+    warmup_sessions = max(
+        config.flow_window,
+        config.ma_window if config.require_above_ma or config.exit_mode == "Moving average" else 2,
+        config.new_high_window if config.entry_mode == "New high + inflow" else 2,
+    )
+    flow_position = int(price_data.index.searchsorted(flow_start, side="left"))
+    price_data = price_data.iloc[max(0, flow_position - warmup_sessions - 5) :]
+    price_data = repair_taiwan_price_discontinuities(price_data, threshold=0.12)
     daily_flow = estimate_daily_security_flow(price_data, flows)
     if daily_flow.empty:
         raise ValueError("institutional flows do not overlap the price database.")
