@@ -78,24 +78,17 @@ def estimate_daily_security_flow(
     selected = selected[selected["Date"].isin(price_data.index)]
     if selected.empty:
         return pd.DataFrame()
-    closes = (
-        price_data.stack(future_stack=True)
-        .rename("Close")
-        .rename_axis(["Date", "Ticker"])
-        .reset_index()
-    )
-    selected = selected.merge(closes, on=["Date", "Ticker"], how="left")
-    selected["Estimated flow value"] = selected["Total net shares"] * selected["Close"]
-    return (
-        selected.pivot_table(
-            index="Date",
-            columns="Ticker",
-            values="Estimated flow value",
-            aggfunc="sum",
-        )
-        .sort_index()
-        .fillna(0.0)
-    )
+    # Pivot shares first, then multiply two compact matrices. The prior
+    # long-form merge materialized more than a million object-heavy rows for a
+    # one-year full-market run and could exceed Streamlit Cloud memory.
+    net_shares = selected.pivot_table(
+        index="Date",
+        columns="Ticker",
+        values="Total net shares",
+        aggfunc="sum",
+    ).sort_index()
+    closes = price_data.reindex(index=net_shares.index, columns=net_shares.columns)
+    return net_shares.mul(closes).fillna(0.0)
 
 
 def _weekly_signal_dates(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -187,13 +180,22 @@ def run_weekly_flow_strategy(
             candidates = candidates[at_high.reindex(candidates.index).fillna(False)]
         selected = list(candidates.nlargest(min(config.top_n, len(candidates))).index)
         weekly_selections[pd.Timestamp(timestamp)] = selected
-        for rank, (ticker, flow_value) in enumerate(
-            values.sort_values(ascending=False).items(),
-            start=1,
-        ):
+        ordered_values = values.sort_values(ascending=False)
+        raw_ranks = ordered_values.rank(method="first", ascending=False).astype(int)
+        retained_tickers = list(
+            dict.fromkeys(
+                [
+                    *ordered_values.head(max(10, config.top_n)).index,
+                    *selected,
+                    *ordered_values.tail(10).index,
+                ]
+            )
+        )
+        for ticker in retained_tickers:
+            flow_value = ordered_values[ticker]
             row: dict[str, object] = {
                 "Signal date": pd.Timestamp(timestamp),
-                "Rank": rank,
+                "Rank": int(raw_ranks[ticker]),
                 "Ticker": ticker,
                 "Weekly flow value": float(flow_value),
                 "Close": float(strategy_prices.at[timestamp, ticker]),
