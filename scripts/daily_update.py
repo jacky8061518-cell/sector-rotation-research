@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-import os
 from pathlib import Path
 
 import pandas as pd
 
 from sector_rotation.broker_branch import (
-    fetch_finmind_broker_branch,
-    load_broker_branch_cache,
+    fetch_histock_weekly_broker_branches,
 )
 from sector_rotation.fund_flow import (
     calculate_fund_flow_signals,
@@ -94,46 +92,37 @@ def main() -> None:
             index=False,
         )
 
-    # Broker-branch reports require a licensed FinMind sponsor token.  To keep
-    # the deployed app light, fetch only the 50 strongest institutional-flow
-    # candidates each day and append normalized raw branch rows to the cache.
-    finmind_token = os.environ.get("FINMIND_TOKEN", "").strip()
+    # Keep the branch workload intentionally small: first select the ten stocks
+    # with the strongest five-session institutional inflow, then fetch only
+    # their public seven-calendar-day cumulative branch tables from HiStock.
     broker_cache_path = taiwan_database_dir / "broker-branches.parquet"
-    broker_cache = load_broker_branch_cache(broker_cache_path)
-    broker_status = "not configured"
-    if finmind_token and not stock_flows.empty and not institutional_flows.empty:
-        latest_flow_date = pd.to_datetime(institutional_flows["Date"]).max().date()
+    broker_cache = pd.DataFrame()
+    broker_status = "no candidates"
+    if not stock_flows.empty:
         focus_tickers = (
-            stock_flows.nlargest(50, "1D net value")["Ticker"]
+            stock_flows[stock_flows["Asset type"] == "股票"]
+            .nlargest(10, "5D net value")["Ticker"]
             .str.replace(r"\.(TW|TWO)$", "", regex=True)
             .tolist()
         )
         fresh_branch_rows = []
         for ticker in focus_tickers:
             try:
-                frame = fetch_finmind_broker_branch(
-                    ticker,
-                    latest_flow_date,
-                    finmind_token,
-                )
-            except (OSError, TimeoutError, ValueError, RuntimeError):
+                frame = fetch_histock_weekly_broker_branches(ticker)
+            except (OSError, TimeoutError, ValueError):
                 continue
             if not frame.empty:
                 fresh_branch_rows.append(frame)
         if fresh_branch_rows:
-            combined = pd.concat([broker_cache, *fresh_branch_rows], ignore_index=True)
             combined = (
-                combined.drop_duplicates(
-                    ["Date", "Ticker", "Broker ID", "Price"],
-                    keep="last",
-                )
-                .sort_values(["Date", "Ticker", "Broker ID"])
+                pd.concat(fresh_branch_rows, ignore_index=True)
+                .drop_duplicates(["Date", "Ticker", "Broker ID"], keep="last")
+                .sort_values(["Ticker", "Broker ID"])
+                .reset_index(drop=True)
             )
-            keep_dates = sorted(combined["Date"].dropna().unique())[-20:]
-            combined = combined[combined["Date"].isin(keep_dates)].reset_index(drop=True)
             combined.to_parquet(broker_cache_path, index=False)
             broker_cache = combined
-            broker_status = f"{len(fresh_branch_rows)} stocks"
+            broker_status = f"HiStock weekly, {len(fresh_branch_rows)} stocks"
         else:
             broker_status = "no new rows"
     tw_written = build_rotation_snapshots(
