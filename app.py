@@ -26,6 +26,7 @@ from sector_rotation.data import (
     repair_taiwan_price_discontinuities,
 )
 import sector_rotation.fund_flow as fund_flow_module
+import sector_rotation.broker_branch as broker_branch_module
 from sector_rotation.flow_strategy import FlowStrategyConfig, run_weekly_flow_strategy
 from sector_rotation.holdings import analyze_holding_leadership, fetch_top_holdings
 from sector_rotation.metrics import benchmark_returns, drawdown, equity_curve, performance_summary
@@ -68,6 +69,15 @@ fund_flow_module = importlib.reload(fund_flow_module)
 calculate_daily_group_flows = fund_flow_module.calculate_daily_group_flows
 calculate_fund_flow_signals = fund_flow_module.calculate_fund_flow_signals
 
+# Streamlit Cloud can hot-reload app.py while retaining the previously imported
+# broker helper module. Reload it so a newly deployed Horizon column is handled
+# immediately instead of waiting for the Python process to restart.
+broker_branch_module = importlib.reload(broker_branch_module)
+aggregate_branch_activity = broker_branch_module.aggregate_branch_activity
+build_broker_research_candidates = broker_branch_module.build_broker_research_candidates
+load_broker_branch_cache = broker_branch_module.load_broker_branch_cache
+normalize_broker_branch_trades = broker_branch_module.normalize_broker_branch_trades
+
 
 FREQUENCY_SETTINGS = {
     "Daily": {
@@ -90,7 +100,7 @@ FREQUENCY_SETTINGS = {
     },
 }
 
-DATA_PIPELINE_VERSION = "0.9.0-multi-horizon-fund-flow"
+DATA_PIPELINE_VERSION = "0.9.1-broker-branch-horizons"
 PROJECT_ROOT = Path(__file__).resolve().parent
 TAIWAN_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "adjusted-prices.parquet"
 TAIWAN_FLOW_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "institutional-flows.parquet"
@@ -626,6 +636,7 @@ def render_lightweight_broker_branch_page() -> None:
         "分點集中度＋法人流向＋價格確認"
     )
     branch_trades = load_taiwan_broker_branches(DATA_PIPELINE_VERSION)
+    branch_trades = normalize_broker_branch_trades(branch_trades)
     taiwan_master = load_taiwan_security_master()
     if branch_trades.empty:
         st.error("券商分點快取尚未建立，請等待每日更新完成。")
