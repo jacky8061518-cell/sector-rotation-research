@@ -9,8 +9,10 @@ on the research-candidate list.
 from __future__ import annotations
 
 from datetime import date
+import gzip
 import json
 from pathlib import Path
+import re
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -22,6 +24,7 @@ FINMIND_BRANCH_URL = (
     "https://api.finmindtrade.com/api/v4/"
     "taiwan_stock_trading_daily_report"
 )
+HISTOCK_BRANCH_URL = "https://histock.tw/stock/branch.aspx?no={ticker}&day=7"
 
 BRANCH_COLUMNS = [
     "Date",
@@ -86,6 +89,94 @@ def fetch_finmind_broker_branch(
     if payload.get("status") != 200:
         raise RuntimeError(payload.get("msg", "券商分點資料下載失敗。"))
     return normalize_broker_branch_trades(pd.DataFrame(payload.get("data", [])))
+
+
+def _plain_text(value: str) -> str:
+    return re.sub(r"<[^>]+>", "", value).replace("&nbsp;", " ").strip()
+
+
+def parse_histock_weekly_branch_page(html: str, ticker: str) -> pd.DataFrame:
+    """Parse HiStock's public seven-day cumulative branch table.
+
+    HiStock reports volumes in lots (張).  They are converted to shares so the
+    result uses the same schema as the licensed FinMind branch reports.
+    """
+    period_match = re.search(
+        r"(\d{4}/\d{1,2}/\d{1,2})\s*~\s*(\d{4}/\d{1,2}/\d{1,2})",
+        html,
+    )
+    if not period_match:
+        return pd.DataFrame(columns=BRANCH_COLUMNS)
+    period_end = pd.to_datetime(period_match.group(2), errors="coerce")
+    if pd.isna(period_end):
+        return pd.DataFrame(columns=BRANCH_COLUMNS)
+
+    records: dict[str, dict[str, object]] = {}
+    for row_match in re.finditer(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL | re.I):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row_match.group(1), re.DOTALL | re.I)
+        if len(cells) < 9:
+            continue
+        clean = [_plain_text(cell) for cell in cells]
+        parsed_sides: list[tuple[str, float, float, float]] = []
+        try:
+            parsed_sides.append(
+                (
+                    clean[0],
+                    float(clean[1].replace(",", "")),
+                    float(clean[2].replace(",", "")),
+                    float(clean[4].replace(",", "")) if clean[4] not in {"", "-"} else 0.0,
+                )
+            )
+        except (ValueError, IndexError):
+            pass
+        for offset in (5, 6):
+            try:
+                name = clean[offset]
+                buy = float(clean[offset + 1].replace(",", ""))
+                sell = float(clean[offset + 2].replace(",", ""))
+                average = (
+                    float(clean[offset + 4].replace(",", ""))
+                    if len(clean) > offset + 4 and clean[offset + 4] not in {"", "-"}
+                    else 0.0
+                )
+            except (ValueError, IndexError):
+                continue
+            if name:
+                parsed_sides.append((name, buy, sell, average))
+                break
+        for broker, buy_lots, sell_lots, average_price in parsed_sides:
+            if not broker or (buy_lots == 0 and sell_lots == 0):
+                continue
+            records[broker] = {
+                "Date": period_end,
+                "Ticker": ticker.split(".")[0],
+                "Broker ID": broker,
+                "Broker": broker,
+                "Price": average_price,
+                "Buy shares": buy_lots * 1000,
+                "Sell shares": sell_lots * 1000,
+            }
+    return normalize_broker_branch_trades(pd.DataFrame(records.values()))
+
+
+def fetch_histock_weekly_broker_branches(ticker: str) -> pd.DataFrame:
+    """Fetch the public 7-day cumulative branch table for one Taiwan stock."""
+    code = ticker.split(".")[0]
+    request = Request(
+        HISTOCK_BRANCH_URL.format(ticker=code),
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TaiwanFundFlowLab/1.0",
+            "Accept-Encoding": "gzip",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        payload = response.read()
+        if response.headers.get("Content-Encoding") == "gzip":
+            payload = gzip.decompress(payload)
+    return parse_histock_weekly_branch_page(
+        payload.decode("utf-8", errors="replace"),
+        code,
+    )
 
 
 def load_broker_branch_cache(path: Path) -> pd.DataFrame:
@@ -155,10 +246,14 @@ def aggregate_branch_activity(
         )
 
     stocks = branch_stock.groupby("Ticker").apply(summarize, include_groups=False).reset_index()
+    stocks["Buyer seller strength"] = (
+        stocks["Top buyer value"]
+        / stocks["Top seller value"].abs().replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
     stocks["Branch concentration score"] = (
-        stocks["Top buyer value"].rank(pct=True).fillna(0.5) * 45
-        + stocks["Positive branch ratio"].rank(pct=True).fillna(0.5) * 25
-        + stocks["Top 3 buying concentration"].rank(pct=True).fillna(0.5) * 30
+        stocks["Top buyer value"].rank(pct=True).fillna(0.5) * 50
+        + stocks["Buyer seller strength"].rank(pct=True).fillna(0.5) * 25
+        + stocks["Top 3 buying concentration"].rank(pct=True).fillna(0.5) * 25
     )
     stocks["Signal date"] = pd.Timestamp(max(dates))
     return branch_stock.sort_values("Net value", ascending=False), stocks.sort_values(
@@ -214,8 +309,9 @@ def build_broker_research_candidates(
     )
     candidates["Reason"] = candidates.apply(
         lambda row: (
-            f"{row['Top buyer']}為最大買超分點；買超分點占比"
-            f"{row['Positive branch ratio']:.0%}；前三大買盤集中度"
+            f"{row['Top buyer']}為最大買超分點；"
+            f"最大買超／最大賣超強度 {row['Buyer seller strength']:.2f} 倍；"
+            f"前三大買盤集中度"
             f"{row['Top 3 buying concentration']:.0%}；法人"
             f"{row['Selected net value'] / 1e8:+.1f}億；價格"
             f"{row['Selected return']:+.1%}。"
