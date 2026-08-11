@@ -32,6 +32,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Refresh prices, institutional flows, and snapshots
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
         run: python scripts/daily_update.py
 
       - name: Verify refreshed Taiwan data
