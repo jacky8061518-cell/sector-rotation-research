@@ -3,9 +3,9 @@ name: Daily Taiwan market-data update
 on:
   workflow_dispatch:
   schedule:
-    # Taiwan exchanges close at 05:30 UTC. Allow time for official files and
-    # Yahoo's adjusted prices to settle before rebuilding the bundled cache.
-    - cron: "30 07 * * 1-5"
+    # 10:00 UTC = 18:00 Asia/Taipei.  This leaves time after the 13:30 close
+    # for official institutional files and public branch summaries to settle.
+    - cron: "0 10 * * 1-5"
 
 permissions:
   contents: write
