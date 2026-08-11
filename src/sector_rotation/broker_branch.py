@@ -24,7 +24,8 @@ FINMIND_BRANCH_URL = (
     "https://api.finmindtrade.com/api/v4/"
     "taiwan_stock_trading_daily_report"
 )
-HISTOCK_BRANCH_URL = "https://histock.tw/stock/branch.aspx?no={ticker}&day=7"
+HISTOCK_BRANCH_URL = "https://histock.tw/stock/branch.aspx?no={ticker}&day={days}"
+HORIZON_DAYS = {"Daily": 1, "Weekly": 7, "Monthly": 30}
 
 BRANCH_COLUMNS = [
     "Date",
@@ -34,6 +35,7 @@ BRANCH_COLUMNS = [
     "Price",
     "Buy shares",
     "Sell shares",
+    "Horizon",
 ]
 
 
@@ -53,9 +55,12 @@ def normalize_broker_branch_trades(frame: pd.DataFrame) -> pd.DataFrame:
         "sell_volume": "Sell shares",
     }
     normalized = frame.rename(columns={key: value for key, value in aliases.items() if key in frame})
-    missing = [column for column in BRANCH_COLUMNS if column not in normalized]
+    required_columns = [column for column in BRANCH_COLUMNS if column != "Horizon"]
+    missing = [column for column in required_columns if column not in normalized]
     if missing:
         raise ValueError(f"券商分點資料缺少欄位：{', '.join(missing)}")
+    if "Horizon" not in normalized:
+        normalized["Horizon"] = "Daily"
     normalized = normalized[BRANCH_COLUMNS].copy()
     normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce").dt.normalize()
     normalized["Ticker"] = (
@@ -63,6 +68,10 @@ def normalize_broker_branch_trades(frame: pd.DataFrame) -> pd.DataFrame:
     )
     normalized["Broker ID"] = normalized["Broker ID"].astype(str).str.strip()
     normalized["Broker"] = normalized["Broker"].astype(str).str.strip()
+    normalized["Horizon"] = normalized["Horizon"].astype(str).where(
+        normalized["Horizon"].astype(str).isin(HORIZON_DAYS),
+        "Daily",
+    )
     for column in ["Price", "Buy shares", "Sell shares"]:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0.0)
     return normalized.dropna(subset=["Date"]).reset_index(drop=True)
@@ -95,12 +104,18 @@ def _plain_text(value: str) -> str:
     return re.sub(r"<[^>]+>", "", value).replace("&nbsp;", " ").strip()
 
 
-def parse_histock_weekly_branch_page(html: str, ticker: str) -> pd.DataFrame:
-    """Parse HiStock's public seven-day cumulative branch table.
+def parse_histock_branch_page(
+    html: str,
+    ticker: str,
+    horizon: str = "Weekly",
+) -> pd.DataFrame:
+    """Parse a public HiStock cumulative branch table.
 
     HiStock reports volumes in lots (張).  They are converted to shares so the
     result uses the same schema as the licensed FinMind branch reports.
     """
+    if horizon not in HORIZON_DAYS:
+        raise ValueError(f"Unsupported broker-branch horizon: {horizon}")
     period_match = re.search(
         r"(\d{4}/\d{1,2}/\d{1,2})\s*~\s*(\d{4}/\d{1,2}/\d{1,2})",
         html,
@@ -155,15 +170,26 @@ def parse_histock_weekly_branch_page(html: str, ticker: str) -> pd.DataFrame:
                 "Price": average_price,
                 "Buy shares": buy_lots * 1000,
                 "Sell shares": sell_lots * 1000,
+                "Horizon": horizon,
             }
     return normalize_broker_branch_trades(pd.DataFrame(records.values()))
 
 
-def fetch_histock_weekly_broker_branches(ticker: str) -> pd.DataFrame:
-    """Fetch the public 7-day cumulative branch table for one Taiwan stock."""
+def parse_histock_weekly_branch_page(html: str, ticker: str) -> pd.DataFrame:
+    """Backward-compatible parser for the seven-day branch table."""
+    return parse_histock_branch_page(html, ticker, "Weekly")
+
+
+def fetch_histock_broker_branches(
+    ticker: str,
+    horizon: str = "Weekly",
+) -> pd.DataFrame:
+    """Fetch a public cumulative branch table for one Taiwan stock."""
+    if horizon not in HORIZON_DAYS:
+        raise ValueError(f"Unsupported broker-branch horizon: {horizon}")
     code = ticker.split(".")[0]
     request = Request(
-        HISTOCK_BRANCH_URL.format(ticker=code),
+        HISTOCK_BRANCH_URL.format(ticker=code, days=HORIZON_DAYS[horizon]),
         headers={
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TaiwanFundFlowLab/1.0",
             "Accept-Encoding": "gzip",
@@ -173,10 +199,16 @@ def fetch_histock_weekly_broker_branches(ticker: str) -> pd.DataFrame:
         payload = response.read()
         if response.headers.get("Content-Encoding") == "gzip":
             payload = gzip.decompress(payload)
-    return parse_histock_weekly_branch_page(
+    return parse_histock_branch_page(
         payload.decode("utf-8", errors="replace"),
         code,
+        horizon,
     )
+
+
+def fetch_histock_weekly_broker_branches(ticker: str) -> pd.DataFrame:
+    """Backward-compatible seven-day branch fetcher."""
+    return fetch_histock_broker_branches(ticker, "Weekly")
 
 
 def load_broker_branch_cache(path: Path) -> pd.DataFrame:
