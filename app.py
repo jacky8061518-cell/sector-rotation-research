@@ -620,7 +620,7 @@ def rrg_chart(
 
 def render_lightweight_broker_branch_page() -> None:
     """Render the weekly branch report without the full-market backtest."""
-    st.title("台股券商分點週報")
+    st.subheader("券商分點週報")
     st.caption(
         "近 5 個交易日法人淨流入前 10 檔｜公開 7 日累積券商分點｜"
         "分點集中度＋法人流向＋價格確認"
@@ -759,18 +759,24 @@ def render_lightweight_broker_branch_page() -> None:
     )
 
 
-with st.sidebar:
-    st.header("研究專欄")
-    research_section = st.radio(
-        "選擇頁面", ["券商分點週報", "完整資金流與輪動"], index=0
-    )
+st.title("台股資金流與券商分點研究系統")
+st.caption(
+    "同一個網站整合：三大法人資金流｜券商分點｜產業輪動｜策略回測"
+)
+research_section = st.segmented_control(
+    "研究模組",
+    ["券商分點週報", "資金流與輪動回測"],
+    default="券商分點週報",
+)
+if research_section is None:
+    research_section = "券商分點週報"
 
 if research_section == "券商分點週報":
     render_lightweight_broker_branch_page()
     st.stop()
 
 
-st.title("Institutional Fund Flow & Rotation Research Lab")
+st.subheader("資金流、產業輪動與策略回測")
 st.caption(
     "台股資金研究｜三大法人流向｜券商分點追蹤｜產業輪動｜個股帶領者"
 )
