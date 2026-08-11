@@ -46,19 +46,32 @@ jobs:
           flow_date = pd.to_datetime(flows["Date"]).max().normalize()
           branch_date = pd.to_datetime(branches["Date"]).max().normalize()
           branch_stocks = branches["Ticker"].astype(str).nunique()
+          horizon_stocks = (
+              branches.groupby("Horizon")["Ticker"].nunique().to_dict()
+              if "Horizon" in branches
+              else {}
+          )
           if (price_date - flow_date).days > 7:
               raise SystemExit(
                   f"Institutional-flow cache is stale: prices={price_date:%Y-%m-%d}, "
                   f"flows={flow_date:%Y-%m-%d}"
               )
-          if branch_stocks < 8 or (price_date - branch_date).days > 10:
+          incomplete_horizons = {
+              horizon: horizon_stocks.get(horizon, 0)
+              for horizon in ["Daily", "Weekly", "Monthly"]
+              if horizon_stocks.get(horizon, 0) < 8
+          }
+          if incomplete_horizons or (price_date - branch_date).days > 10:
               raise SystemExit(
-                  f"Broker-branch cache is incomplete: stocks={branch_stocks}, "
+                  f"Broker-branch cache is incomplete: horizons={horizon_stocks}, "
                   f"branches={branch_date:%Y-%m-%d}, prices={price_date:%Y-%m-%d}"
               )
           print(f"Taiwan prices through {price_date:%Y-%m-%d}")
           print(f"Taiwan institutional flows through {flow_date:%Y-%m-%d}")
-          print(f"Broker branches through {branch_date:%Y-%m-%d}: {branch_stocks} stocks")
+          print(
+              f"Broker branches through {branch_date:%Y-%m-%d}: "
+              f"{branch_stocks} unique stocks, {horizon_stocks}"
+          )
           PY
 
       - name: Commit refreshed database
