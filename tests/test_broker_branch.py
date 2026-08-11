@@ -4,6 +4,7 @@ from sector_rotation.broker_branch import (
     aggregate_branch_activity,
     build_broker_research_candidates,
     normalize_broker_branch_trades,
+    parse_histock_branch_page,
     parse_histock_weekly_branch_page,
 )
 
@@ -25,9 +26,11 @@ def sample_trades() -> pd.DataFrame:
 def test_normalize_finmind_schema():
     normalized = normalize_broker_branch_trades(sample_trades())
     assert list(normalized.columns) == [
-        "Date", "Ticker", "Broker ID", "Broker", "Price", "Buy shares", "Sell shares"
+        "Date", "Ticker", "Broker ID", "Broker", "Price", "Buy shares", "Sell shares",
+        "Horizon",
     ]
     assert normalized["Ticker"].tolist()[0] == "2330"
+    assert normalized["Horizon"].eq("Daily").all()
 
 
 def test_branch_activity_ranks_concentrated_buying():
@@ -76,3 +79,16 @@ def test_parses_histock_weekly_branch_table():
     buyer = parsed[parsed["Broker"] == "買超分點"].iloc[0]
     assert buyer["Buy shares"] == 700_000
     assert buyer["Date"] == pd.Timestamp("2026-08-10")
+    assert buyer["Horizon"] == "Weekly"
+
+
+def test_parser_preserves_requested_monthly_horizon():
+    html = """
+    <div>2026/07/11 ~ 2026/08/10</div>
+    <table><tr>
+      <td>賣超分點</td><td>10</td><td>20</td><td>-10</td><td>52.5</td>
+      <td>買超分點</td><td>30</td><td>10</td><td>20</td><td>51.8</td>
+    </tr></table>
+    """
+    parsed = parse_histock_branch_page(html, "2408", "Monthly")
+    assert parsed["Horizon"].eq("Monthly").all()
