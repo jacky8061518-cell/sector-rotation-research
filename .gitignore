@@ -17,5 +17,6 @@ data/databases/tw/*
 !data/databases/tw/institutional-flows.parquet
 !data/databases/tw/security-master.csv
 !data/databases/tw/coverage-report.csv
+!data/databases/tw/broker-branches.parquet
 data/cache/
 data/snapshots/

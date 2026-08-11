@@ -1755,7 +1755,7 @@ with tab_broker_branch:
         key="broker_branch_upload",
     )
     branch_trades = load_taiwan_broker_branches(DATA_PIPELINE_VERSION)
-    branch_source = "每日資料庫"
+    branch_source = "HiStock 公開分點頁（7日累積）"
     if uploaded_branch_file is not None:
         try:
             branch_trades = normalize_broker_branch_trades(
@@ -1768,9 +1768,9 @@ with tab_broker_branch:
 
     if branch_trades.empty:
         st.info(
-            "券商分點資料庫尚未建立。公開免費的三大法人資料不包含分點；"
-            "完整分點資料需要合法授權來源。系統已支援 FinMind 贊助會員格式，"
-            "也可先上傳你從資料服務商匯出的 CSV。"
+            "券商分點資料庫尚未建立；每日更新會先挑出近 5 個交易日法人"
+            "淨流入前 10 檔股票，再逐檔抓取公開的 7 日累積券商分點。"
+            "你也可以先上傳券商軟體匯出的 CSV。"
         )
         sample_branch_csv = pd.DataFrame(
             {
@@ -1789,28 +1789,21 @@ with tab_broker_branch:
             file_name="broker-branch-template.csv",
             mime="text/csv",
         )
-        st.warning(
-            "在沒有真實分點資料時，系統不會用三大法人資料假造券商分點推薦。"
-        )
+        st.warning("在沒有真實分點資料時，系統不會假造券商分點推薦。")
     else:
-        branch_horizon = st.segmented_control(
-            "分點觀察期間",
-            ["今日", "本週", "本月"],
-            default="本週",
-            key="broker_branch_horizon",
-        ) or "本週"
-        branch_window = {"今日": 1, "本週": 5, "本月": 20}[branch_horizon]
+        st.info(
+            "本頁股票範圍＝最近 5 個交易日三大法人估算淨流入前 10 名；"
+            "每檔券商分點＝HiStock 公開頁的 7 日累積買賣超。"
+        )
         branch_activity, branch_stocks = aggregate_branch_activity(
             branch_trades,
-            window=branch_window,
+            # Each cached row is already a seven-day cumulative observation.
+            window=1,
         )
-        matching_frequency = {"今日": "Daily", "本週": "Weekly", "本月": "Monthly"}[
-            branch_horizon
-        ]
         branch_institutional, _ = apply_flow_horizon(
             base_flow_securities,
             base_flow_groups,
-            matching_frequency,
+            "Weekly",
         )
         broker_candidates = build_broker_research_candidates(
             branch_stocks,
@@ -1824,7 +1817,7 @@ with tab_broker_branch:
         branch_metrics[2].metric("涵蓋股票", f"{branch_stocks['Ticker'].nunique():,}")
         branch_metrics[3].metric("涵蓋分點", f"{branch_activity['Broker ID'].nunique():,}")
 
-        st.markdown("#### 分點訊號推薦股票")
+        st.markdown("#### 當週法人流入前 10 檔：分點訊號推薦")
         st.caption(
             "分數＝分點集中訊號 50%＋三大法人確認 30%＋價格確認 20%。"
             "『優先研究』不是自動下單建議，仍需檢查事件、流動性與風險。"
@@ -1843,7 +1836,7 @@ with tab_broker_branch:
                     "Research score",
                     "Top buyer",
                     "最大買超（億）",
-                    "Positive branch ratio",
+                    "Buyer seller strength",
                     "Top 3 buying concentration",
                     "法人流向（億）",
                     "Selected return",
@@ -1858,7 +1851,7 @@ with tab_broker_branch:
                     "Recommendation": "研究結論",
                     "Research score": "研究分數",
                     "Top buyer": "最大買超分點",
-                    "Positive branch ratio": "買超分點占比",
+                    "Buyer seller strength": "買賣強度比",
                     "Top 3 buying concentration": "前三大買盤集中度",
                     "Selected return": "同期報酬",
                     "Reason": "原因",
@@ -1868,7 +1861,7 @@ with tab_broker_branch:
                 "研究分數": st.column_config.NumberColumn(format="%.1f"),
                 "最大買超（億）": st.column_config.NumberColumn(format="%+.2f"),
                 "法人流向（億）": st.column_config.NumberColumn(format="%+.2f"),
-                "買超分點占比": st.column_config.ProgressColumn(format="%.0%%", min_value=0, max_value=1),
+                "買賣強度比": st.column_config.NumberColumn(format="%.2fx"),
                 "前三大買盤集中度": st.column_config.ProgressColumn(format="%.0%%", min_value=0, max_value=1),
                 "同期報酬": st.column_config.NumberColumn(format="%+.1%%"),
             },
@@ -1911,7 +1904,7 @@ with tab_broker_branch:
                     size="Top buyer value",
                     color="Recommendation",
                     hover_name="Name",
-                    hover_data=["Ticker", "Top buyer", "Positive branch ratio"],
+                    hover_data=["Ticker", "Top buyer", "Buyer seller strength"],
                     labels={
                         "Branch concentration score": "分點集中分數",
                         "Selected net value": "三大法人估算淨流入",
