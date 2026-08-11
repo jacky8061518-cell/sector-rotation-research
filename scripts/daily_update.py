@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
 
-from sector_rotation.config import BENCHMARK, DEFENSIVE_ASSET
+import pandas as pd
+
+from sector_rotation.broker_branch import (
+    fetch_finmind_broker_branch,
+    load_broker_branch_cache,
+)
 from sector_rotation.fund_flow import (
     calculate_fund_flow_signals,
     update_institutional_flow_cache,
 )
 from sector_rotation.snapshots import (
-    all_research_tickers,
     build_rrg_snapshots,
     build_rotation_snapshots,
     update_price_cache,
@@ -24,7 +29,6 @@ from sector_rotation.taiwan import (
     assets_from_taiwan_themes,
     fetch_taiwan_security_master,
 )
-from sector_rotation.universe import assets_for, groups_for
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -33,31 +37,6 @@ SNAPSHOT_ROOT = PROJECT_ROOT / "data" / "snapshots"
 
 
 def main() -> None:
-    us_tickers = all_research_tickers()
-    us_prices = update_price_cache(
-        DATABASE_DIR / "us" / "adjusted-prices.parquet",
-        us_tickers,
-    )
-    us_written = build_rotation_snapshots(
-        us_prices,
-        SNAPSHOT_ROOT / "us",
-        assets=us_tickers,
-        benchmark=BENCHMARK,
-        defensive_asset=DEFENSIVE_ASSET,
-    )
-    us_rrg_metadata = assets_for(
-        "Detailed industries — ETFs",
-        groups_for("Detailed industries — ETFs"),
-    )
-    us_written.extend(
-        build_rrg_snapshots(
-            us_prices,
-            SNAPSHOT_ROOT / "us",
-            us_rrg_metadata,
-            BENCHMARK,
-        )
-    )
-
     taiwan_master = fetch_taiwan_security_master()
     taiwan_database_dir = DATABASE_DIR / "tw"
     taiwan_database_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +93,49 @@ def main() -> None:
             taiwan_snapshot_dir / "latest-industry-fund-flow.csv",
             index=False,
         )
+
+    # Broker-branch reports require a licensed FinMind sponsor token.  To keep
+    # the deployed app light, fetch only the 50 strongest institutional-flow
+    # candidates each day and append normalized raw branch rows to the cache.
+    finmind_token = os.environ.get("FINMIND_TOKEN", "").strip()
+    broker_cache_path = taiwan_database_dir / "broker-branches.parquet"
+    broker_cache = load_broker_branch_cache(broker_cache_path)
+    broker_status = "not configured"
+    if finmind_token and not stock_flows.empty and not institutional_flows.empty:
+        latest_flow_date = pd.to_datetime(institutional_flows["Date"]).max().date()
+        focus_tickers = (
+            stock_flows.nlargest(50, "1D net value")["Ticker"]
+            .str.replace(r"\.(TW|TWO)$", "", regex=True)
+            .tolist()
+        )
+        fresh_branch_rows = []
+        for ticker in focus_tickers:
+            try:
+                frame = fetch_finmind_broker_branch(
+                    ticker,
+                    latest_flow_date,
+                    finmind_token,
+                )
+            except (OSError, TimeoutError, ValueError, RuntimeError):
+                continue
+            if not frame.empty:
+                fresh_branch_rows.append(frame)
+        if fresh_branch_rows:
+            combined = pd.concat([broker_cache, *fresh_branch_rows], ignore_index=True)
+            combined = (
+                combined.drop_duplicates(
+                    ["Date", "Ticker", "Broker ID", "Price"],
+                    keep="last",
+                )
+                .sort_values(["Date", "Ticker", "Broker ID"])
+            )
+            keep_dates = sorted(combined["Date"].dropna().unique())[-20:]
+            combined = combined[combined["Date"].isin(keep_dates)].reset_index(drop=True)
+            combined.to_parquet(broker_cache_path, index=False)
+            broker_cache = combined
+            broker_status = f"{len(fresh_branch_rows)} stocks"
+        else:
+            broker_status = "no new rows"
     tw_written = build_rotation_snapshots(
         tw_prices,
         SNAPSHOT_ROOT / "tw",
@@ -136,14 +158,13 @@ def main() -> None:
 
     print(
         f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] "
-        f"US: {len(us_prices.columns)} tickers through {us_prices.index.max():%Y-%m-%d}, "
-        f"{len(us_written)} files; "
         f"TW master: {len(taiwan_master)} securities "
         f"({(taiwan_master['Asset type'] == '股票').sum()} stocks, "
         f"{(taiwan_master['Asset type'] == 'ETF').sum()} ETFs); "
         f"TW prices: {coverage['In price database'].sum()} tickers through "
         f"{tw_prices.index.max():%Y-%m-%d}, "
-        f"{len(tw_written)} files"
+        f"{len(tw_written)} files; broker branches: {broker_status}, "
+        f"{len(broker_cache):,} cached rows"
     )
 
 
