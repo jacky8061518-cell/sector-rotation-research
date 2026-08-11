@@ -619,10 +619,10 @@ def rrg_chart(
 
 
 def render_lightweight_broker_branch_page() -> None:
-    """Render the weekly branch report without the full-market backtest."""
-    st.subheader("券商分點週報")
+    """Render daily, weekly, and monthly branch reports without the full backtest."""
+    st.subheader("券商分點日／週／月追蹤")
     st.caption(
-        "近 5 個交易日法人淨流入前 10 檔｜公開 7 日累積券商分點｜"
+        "分別追蹤當日、近 5 個交易日與近 20 個交易日法人淨流入前 10 檔｜"
         "分點集中度＋法人流向＋價格確認"
     )
     branch_trades = load_taiwan_broker_branches(DATA_PIPELINE_VERSION)
@@ -631,13 +631,12 @@ def render_lightweight_broker_branch_page() -> None:
         st.error("券商分點快取尚未建立，請等待每日更新完成。")
         return
 
-    branch_activity, branch_stocks = aggregate_branch_activity(branch_trades, window=1)
     code_to_yahoo = (
         taiwan_master.drop_duplicates("Code").set_index("Code")["Yahoo ticker"].to_dict()
     )
     broker_tickers = tuple(
         code_to_yahoo[code]
-        for code in branch_stocks["Ticker"].astype(str)
+        for code in branch_trades["Ticker"].astype(str).unique()
         if code in code_to_yahoo
     )
     recent_prices = load_taiwan_price_subset(
@@ -647,112 +646,169 @@ def render_lightweight_broker_branch_page() -> None:
         DATA_PIPELINE_VERSION,
     )
     institutional_flows = load_taiwan_institutional_flows(DATA_PIPELINE_VERSION)
-    if recent_prices.empty or institutional_flows.empty:
-        institutional_weekly = pd.DataFrame()
-    else:
-        securities, groups = calculate_fund_flow_signals(
+    base_securities = pd.DataFrame()
+    base_groups = pd.DataFrame()
+    if not recent_prices.empty and not institutional_flows.empty:
+        base_securities, base_groups = calculate_fund_flow_signals(
             recent_prices,
             institutional_flows,
             taiwan_master,
         )
-        institutional_weekly, _ = apply_flow_horizon(securities, groups, "Weekly")
-    candidates = build_broker_research_candidates(
-        branch_stocks,
-        institutional_weekly,
-        taiwan_master,
-    )
 
-    branch_date = pd.to_datetime(branch_trades["Date"]).max()
-    metrics = st.columns(4)
-    metrics[0].metric("資料來源", "HiStock 公開分點頁")
-    metrics[1].metric("分點期間截止", f"{branch_date:%Y-%m-%d}")
-    metrics[2].metric("追蹤股票", f"{branch_stocks['Ticker'].nunique():,}")
-    metrics[3].metric("不同分點", f"{branch_activity['Broker ID'].nunique():,}")
-    st.info(
-        "股票先依官方三大法人最近 5 個交易日估算淨流入選前 10；"
-        "再逐檔讀取公開頁最近 7 日累積的主要買超／賣超分點。"
-    )
-
-    view = candidates.copy()
-    view["最大買超（億）"] = view["Top buyer value"] / 1e8
-    view["法人流向（億）"] = view["Selected net value"] / 1e8
-    st.markdown("### 當週法人流入前 10 檔：券商分點狀況")
-    st.dataframe(
-        view[
-            [
-                "Ticker", "Name", "Detailed industry", "Investment theme",
-                "Recommendation", "Research score", "Top buyer", "最大買超（億）",
-                "Top seller", "Buyer seller strength", "Top 3 buying concentration",
-                "法人流向（億）", "Selected return", "Reason",
-            ]
-        ].rename(
-            columns={
-                "Ticker": "股票", "Name": "名稱", "Detailed industry": "細分產業",
-                "Investment theme": "投資主題", "Recommendation": "研究結論",
-                "Research score": "研究分數", "Top buyer": "最大買超分點",
-                "Top seller": "最大賣超分點", "Buyer seller strength": "買賣強度比",
-                "Top 3 buying concentration": "前三大買盤集中度",
-                "Selected return": "同期報酬", "Reason": "原因",
-            }
-        ),
-        column_config={
-            "研究分數": st.column_config.NumberColumn(format="%.1f"),
-            "最大買超（億）": st.column_config.NumberColumn(format="%+.2f"),
-            "法人流向（億）": st.column_config.NumberColumn(format="%+.2f"),
-            "買賣強度比": st.column_config.NumberColumn(format="%.2fx"),
-            "前三大買盤集中度": st.column_config.ProgressColumn(
-                format="%.0%%", min_value=0, max_value=1
-            ),
-            "同期報酬": st.column_config.NumberColumn(format="%+.1%%"),
+    horizon_settings = {
+        "Daily": {
+            "label": "當日",
+            "institutional_period": "最新 1 個交易日",
+            "branch_period": "1 日累積",
         },
-        hide_index=True,
-        width="stretch",
-        height=520,
-    )
-
-    chart_left, chart_right = st.columns(2)
-    with chart_left:
-        st.markdown("### 各股票最大買超分點")
-        st.plotly_chart(
-            px.bar(
-                candidates.sort_values("Top buyer value"),
-                x="Top buyer value", y="Name", color="Buyer seller strength",
-                orientation="h", hover_data=["Ticker", "Top buyer", "Top seller"],
-                labels={"Top buyer value": "最大分點估算買超", "Name": "股票",
-                        "Buyer seller strength": "買賣強度比"},
-            ).update_layout(height=520),
-            width="stretch",
-        )
-    with chart_right:
-        st.markdown("### 分點集中度 × 法人確認")
-        st.plotly_chart(
-            px.scatter(
-                candidates,
-                x="Branch concentration score", y="Selected net value",
-                size="Top buyer value", color="Recommendation", hover_name="Name",
-                hover_data=["Ticker", "Top buyer", "Buyer seller strength"],
-                labels={"Branch concentration score": "分點集中分數",
-                        "Selected net value": "近 5 日法人估算淨流入"},
-            ).update_layout(height=520),
-            width="stretch",
-        )
-
-    option_map = {
-        f"{row['Ticker']}｜{row.get('Name', '')}": row["Ticker"]
-        for _, row in candidates.iterrows()
+        "Weekly": {
+            "label": "當週",
+            "institutional_period": "最近 5 個交易日",
+            "branch_period": "7 日累積",
+        },
+        "Monthly": {
+            "label": "當月",
+            "institutional_period": "最近 20 個交易日",
+            "branch_period": "30 日累積",
+        },
     }
-    selected_label = st.selectbox("查看個股分點明細", list(option_map))
-    detail = branch_activity[branch_activity["Ticker"] == option_map[selected_label]].copy()
-    detail["淨買超（張）"] = detail["Net shares"] / 1000
-    detail["估算淨買超（億）"] = detail["Net value"] / 1e8
-    st.dataframe(
-        detail[["Broker", "Direction", "淨買超（張）", "估算淨買超（億）"]].rename(
-            columns={"Broker": "券商分點", "Direction": "方向"}
-        ),
-        hide_index=True,
-        width="stretch",
-        height=440,
-    )
+    period_tabs = st.tabs([settings["label"] for settings in horizon_settings.values()])
+
+    for period_tab, (horizon, settings) in zip(period_tabs, horizon_settings.items()):
+        with period_tab:
+            period_trades = branch_trades[branch_trades["Horizon"] == horizon].copy()
+            if period_trades.empty:
+                st.info(f"{settings['label']}券商分點資料尚未建立，請等待每日更新。")
+                continue
+            branch_activity, branch_stocks = aggregate_branch_activity(
+                period_trades,
+                window=1,
+            )
+            if base_securities.empty:
+                institutional_period = pd.DataFrame()
+            else:
+                institutional_period, _ = apply_flow_horizon(
+                    base_securities,
+                    base_groups,
+                    horizon,
+                )
+            candidates = build_broker_research_candidates(
+                branch_stocks,
+                institutional_period,
+                taiwan_master,
+            )
+            if candidates.empty:
+                st.info(f"{settings['label']}沒有足夠資料可建立券商分點排名。")
+                continue
+
+            branch_date = pd.to_datetime(period_trades["Date"]).max()
+            metrics = st.columns(4)
+            metrics[0].metric("資料來源", "HiStock 公開分點頁")
+            metrics[1].metric("分點期間截止", f"{branch_date:%Y-%m-%d}")
+            metrics[2].metric("追蹤股票", f"{branch_stocks['Ticker'].nunique():,}")
+            metrics[3].metric("不同分點", f"{branch_activity['Broker ID'].nunique():,}")
+            covered_stocks = int(branch_stocks["Ticker"].nunique())
+            st.info(
+                f"股票先依官方三大法人{settings['institutional_period']}估算淨流入選前 10；"
+                f"再逐檔讀取公開頁{settings['branch_period']}的主要買超／賣超分點。"
+            )
+            if covered_stocks < 10:
+                st.warning(
+                    f"本期前 10 檔目前已取得 {covered_stocks} 檔分點；"
+                    "公開來源達匿名查詢上限後會暫停回傳，其餘資料將由每日更新繼續補齊。"
+                )
+
+            view = candidates.copy()
+            view["最大買超（億）"] = view["Top buyer value"] / 1e8
+            view["法人流向（億）"] = view["Selected net value"] / 1e8
+            st.markdown(
+                f"### {settings['label']}法人流入前 10 檔：券商分點狀況"
+                + (f"（目前 {covered_stocks} 檔）" if covered_stocks < 10 else "")
+            )
+            st.dataframe(
+                view[
+                    [
+                        "Ticker", "Name", "Detailed industry", "Investment theme",
+                        "Recommendation", "Research score", "Top buyer", "最大買超（億）",
+                        "Top seller", "Buyer seller strength", "Top 3 buying concentration",
+                        "法人流向（億）", "Selected return", "Reason",
+                    ]
+                ].rename(
+                    columns={
+                        "Ticker": "股票", "Name": "名稱", "Detailed industry": "細分產業",
+                        "Investment theme": "投資主題", "Recommendation": "研究結論",
+                        "Research score": "研究分數", "Top buyer": "最大買超分點",
+                        "Top seller": "最大賣超分點", "Buyer seller strength": "買賣強度比",
+                        "Top 3 buying concentration": "前三大買盤集中度",
+                        "Selected return": "同期報酬", "Reason": "原因",
+                    }
+                ),
+                column_config={
+                    "研究分數": st.column_config.NumberColumn(format="%.1f"),
+                    "最大買超（億）": st.column_config.NumberColumn(format="%+.2f"),
+                    "法人流向（億）": st.column_config.NumberColumn(format="%+.2f"),
+                    "買賣強度比": st.column_config.NumberColumn(format="%.2fx"),
+                    "前三大買盤集中度": st.column_config.ProgressColumn(
+                        format="%.0%%", min_value=0, max_value=1
+                    ),
+                    "同期報酬": st.column_config.NumberColumn(format="%+.1%%"),
+                },
+                hide_index=True,
+                width="stretch",
+                height=520,
+            )
+
+            chart_left, chart_right = st.columns(2)
+            with chart_left:
+                st.markdown(f"### {settings['label']}各股票最大買超分點")
+                st.plotly_chart(
+                    px.bar(
+                        candidates.sort_values("Top buyer value"),
+                        x="Top buyer value", y="Name", color="Buyer seller strength",
+                        orientation="h", hover_data=["Ticker", "Top buyer", "Top seller"],
+                        labels={"Top buyer value": "最大分點估算買超", "Name": "股票",
+                                "Buyer seller strength": "買賣強度比"},
+                    ).update_layout(height=520),
+                    width="stretch",
+                    key=f"light_broker_buyers_{horizon}",
+                )
+            with chart_right:
+                st.markdown(f"### {settings['label']}分點集中度 × 法人確認")
+                st.plotly_chart(
+                    px.scatter(
+                        candidates,
+                        x="Branch concentration score", y="Selected net value",
+                        size="Top buyer value", color="Recommendation", hover_name="Name",
+                        hover_data=["Ticker", "Top buyer", "Buyer seller strength"],
+                        labels={"Branch concentration score": "分點集中分數",
+                                "Selected net value": f"{settings['institutional_period']}法人估算淨流入"},
+                    ).update_layout(height=520),
+                    width="stretch",
+                    key=f"light_broker_scatter_{horizon}",
+                )
+
+            option_map = {
+                f"{row['Ticker']}｜{row.get('Name', '')}": row["Ticker"]
+                for _, row in candidates.iterrows()
+            }
+            selected_label = st.selectbox(
+                f"查看{settings['label']}個股分點明細",
+                list(option_map),
+                key=f"light_broker_detail_{horizon}",
+            )
+            detail = branch_activity[
+                branch_activity["Ticker"] == option_map[selected_label]
+            ].copy()
+            detail["淨買超（張）"] = detail["Net shares"] / 1000
+            detail["估算淨買超（億）"] = detail["Net value"] / 1e8
+            st.dataframe(
+                detail[["Broker", "Direction", "淨買超（張）", "估算淨買超（億）"]].rename(
+                    columns={"Broker": "券商分點", "Direction": "方向"}
+                ),
+                hide_index=True,
+                width="stretch",
+                height=440,
+            )
     st.warning(
         "券商分點是成交通路，不等於最終投資人身分；分點買超只能作為籌碼集中線索，"
         "仍要搭配法人、價格、事件與風險判斷。"
@@ -765,7 +821,7 @@ st.caption(
 )
 research_section = st.segmented_control(
     "研究模組",
-    ["券商分點週報", "資金流與輪動回測"],
+    ["資金流與輪動回測", "券商分點週報"],
     default="券商分點週報",
 )
 if research_section is None:
@@ -1934,7 +1990,17 @@ with tab_broker_branch:
         key="broker_branch_upload",
     )
     branch_trades = load_taiwan_broker_branches(DATA_PIPELINE_VERSION)
-    branch_source = "HiStock 公開分點頁（7日累積）"
+    branch_period_labels = {
+        "Daily": "1日累積",
+        "Weekly": "7日累積",
+        "Monthly": "30日累積",
+    }
+    branch_institutional_labels = {
+        "Daily": "最新1個交易日",
+        "Weekly": "最近5個交易日",
+        "Monthly": "最近20個交易日",
+    }
+    branch_source = f"HiStock 公開分點頁（{branch_period_labels[frequency]}）"
     if uploaded_branch_file is not None:
         try:
             branch_trades = normalize_broker_branch_trades(
@@ -1945,10 +2011,15 @@ with tab_broker_branch:
             st.error(f"券商分點 CSV 無法讀取：{exc}")
             branch_trades = pd.DataFrame()
 
+    if not branch_trades.empty:
+        branch_trades = branch_trades[
+            branch_trades["Horizon"] == frequency
+        ].copy()
+
     if branch_trades.empty:
         st.info(
-            "券商分點資料庫尚未建立；每日更新會先挑出近 5 個交易日法人"
-            "淨流入前 10 檔股票，再逐檔抓取公開的 7 日累積券商分點。"
+            f"{frequency_settings['label']}券商分點資料庫尚未建立；每日更新會先挑出"
+            "相同期間法人淨流入前 10 檔股票，再逐檔抓取公開券商分點。"
             "你也可以先上傳券商軟體匯出的 CSV。"
         )
         sample_branch_csv = pd.DataFrame(
@@ -1971,8 +2042,9 @@ with tab_broker_branch:
         st.warning("在沒有真實分點資料時，系統不會假造券商分點推薦。")
     else:
         st.info(
-            "本頁股票範圍＝最近 5 個交易日三大法人估算淨流入前 10 名；"
-            "每檔券商分點＝HiStock 公開頁的 7 日累積買賣超。"
+            f"本頁股票範圍＝{branch_institutional_labels[frequency]}"
+            "三大法人估算淨流入前 10 名；"
+            f"每檔券商分點＝HiStock 公開頁的{branch_period_labels[frequency]}買賣超。"
         )
         branch_activity, branch_stocks = aggregate_branch_activity(
             branch_trades,
@@ -1982,7 +2054,7 @@ with tab_broker_branch:
         branch_institutional, _ = apply_flow_horizon(
             base_flow_securities,
             base_flow_groups,
-            "Weekly",
+            frequency,
         )
         broker_candidates = build_broker_research_candidates(
             branch_stocks,
@@ -1996,7 +2068,9 @@ with tab_broker_branch:
         branch_metrics[2].metric("涵蓋股票", f"{branch_stocks['Ticker'].nunique():,}")
         branch_metrics[3].metric("涵蓋分點", f"{branch_activity['Broker ID'].nunique():,}")
 
-        st.markdown("#### 當週法人流入前 10 檔：分點訊號推薦")
+        st.markdown(
+            f"#### {frequency_settings['label']}法人流入前 10 檔：分點訊號推薦"
+        )
         st.caption(
             "分數＝分點集中訊號 50%＋三大法人確認 30%＋價格確認 20%。"
             "『優先研究』不是自動下單建議，仍需檢查事件、流動性與風險。"
