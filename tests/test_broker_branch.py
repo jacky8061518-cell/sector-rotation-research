@@ -4,6 +4,7 @@ from sector_rotation.broker_branch import (
     aggregate_branch_activity,
     build_broker_research_candidates,
     normalize_broker_branch_trades,
+    parse_histock_weekly_branch_page,
 )
 
 
@@ -35,6 +36,7 @@ def test_branch_activity_ranks_concentrated_buying():
     assert set(stocks["Ticker"]) == {"2330", "2408"}
     assert stocks.iloc[0]["Top buyer"] == "甲"
     assert stocks.iloc[0]["Positive branch ratio"] > 0
+    assert stocks.iloc[0]["Buyer seller strength"] > 0
 
 
 def test_candidates_require_confirmation_for_priority():
@@ -59,3 +61,18 @@ def test_candidates_require_confirmation_for_priority():
     tsmc = candidates[candidates["Ticker"] == "2330"].iloc[0]
     assert tsmc["Recommendation"] == "優先研究"
     assert "最大買超分點" in tsmc["Reason"]
+
+
+def test_parses_histock_weekly_branch_table():
+    html = """
+    <div>2026/08/03 ~ 2026/08/10</div>
+    <table><tr>
+      <td>賣超分點</td><td>100</td><td>500</td><td>-400</td><td>52.5</td>
+      <td>買超分點</td><td>700</td><td>100</td><td>600</td><td>51.8</td>
+    </tr></table>
+    """
+    parsed = parse_histock_weekly_branch_page(html, "2408")
+    assert set(parsed["Broker"]) == {"買超分點", "賣超分點"}
+    buyer = parsed[parsed["Broker"] == "買超分點"].iloc[0]
+    assert buyer["Buy shares"] == 700_000
+    assert buyer["Date"] == pd.Timestamp("2026-08-10")
