@@ -12,6 +12,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from sector_rotation.broker_branch import (
+    aggregate_branch_activity,
+    build_broker_research_candidates,
+    load_broker_branch_cache,
+    normalize_broker_branch_trades,
+)
 from sector_rotation.config import BENCHMARK, DEFENSIVE_ASSET
 from sector_rotation.data import (
     download_adjusted_prices,
@@ -86,9 +92,11 @@ FREQUENCY_SETTINGS = {
 
 DATA_PIPELINE_VERSION = "0.9.0-multi-horizon-fund-flow"
 PROJECT_ROOT = Path(__file__).resolve().parent
-US_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "us" / "adjusted-prices.parquet"
 TAIWAN_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "adjusted-prices.parquet"
 TAIWAN_FLOW_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "institutional-flows.parquet"
+TAIWAN_BROKER_BRANCH_DATABASE = (
+    PROJECT_ROOT / "data" / "databases" / "tw" / "broker-branches.parquet"
+)
 TAIWAN_SECURITY_MASTER_DATABASE = (
     PROJECT_ROOT / "data" / "databases" / "tw" / "security-master.csv"
 )
@@ -168,22 +176,6 @@ st.markdown(
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_live_data(
-    tickers: tuple[str, ...],
-    start: date,
-    end: date,
-    pipeline_version: str,
-) -> pd.DataFrame:
-    del pipeline_version  # Deliberately part of the Streamlit cache key.
-    return load_cached_or_download_prices(
-        US_PRICE_DATABASE,
-        list(tickers),
-        start,
-        end,
-    )
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
 def load_split_adjusted_close(
     ticker: str,
     start: date,
@@ -251,6 +243,12 @@ def load_taiwan_institutional_flows(pipeline_version: str) -> pd.DataFrame:
     flows = pd.read_parquet(TAIWAN_FLOW_DATABASE)
     flows["Date"] = pd.to_datetime(flows["Date"])
     return flows
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_taiwan_broker_branches(pipeline_version: str) -> pd.DataFrame:
+    del pipeline_version
+    return load_broker_branch_cache(TAIWAN_BROKER_BRANCH_DATABASE)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -601,18 +599,13 @@ def rrg_chart(
 
 st.title("Institutional Fund Flow & Rotation Research Lab")
 st.caption(
-    "資金先行、價格確認｜三大法人流向｜產業輪動｜個股帶領者｜美股＋台股雙資料庫"
+    "台股資金研究｜三大法人流向｜券商分點追蹤｜產業輪動｜個股帶領者"
 )
 
 with st.sidebar:
     st.header("研究範圍")
-    market = st.segmented_control(
-        "市場資料庫",
-        ["美股", "台股"],
-        default="台股",
-    )
-    if market is None:
-        market = "台股"
+    market = "台股"
+    st.caption("目前版本專注台股；美股資料與入口已暫時移除，以降低記憶體用量。")
 
     data_mode = st.radio(
         "資料來源",
@@ -621,7 +614,7 @@ with st.sidebar:
         help="Offline demo 使用合成資料，只能測試功能。",
     )
 
-    if market == "美股":
+    if False:  # 保留舊版研究設定供未來重新接回，但不載入美股資料。
         benchmark_ticker = BENCHMARK
         benchmark_label = "SPY"
         defensive_ticker = DEFENSIVE_ASSET
@@ -857,13 +850,8 @@ try:
                     end_date + timedelta(days=1),
                     DATA_PIPELINE_VERSION,
                 )
-            else:
-                prices = load_live_data(
-                    download_tickers,
-                    start_date,
-                    end_date + timedelta(days=1),
-                    DATA_PIPELINE_VERSION,
-                )
+            else:  # pragma: no cover - market is fixed to Taiwan in this version.
+                raise RuntimeError("美股資料庫目前已停用。")
         else:
             prices = load_demo_data(download_tickers).loc[
                 pd.Timestamp(start_date) : pd.Timestamp(end_date)
@@ -1284,6 +1272,7 @@ else:
 (
     tab_flow,
     tab_flow_strategy,
+    tab_broker_branch,
     tab_overview,
     tab_attention,
     tab_rankings,
@@ -1294,6 +1283,7 @@ else:
     [
         "資金流雷達",
         "資金流策略",
+        "券商分點追蹤",
         "績效",
         "關注與主要玩家",
         "詳細排名",
@@ -1747,6 +1737,228 @@ with tab_flow_strategy:
                 +
                 "此頁是研究與模擬，不會送出真實委託。"
             )
+
+with tab_broker_branch:
+    st.markdown("### 券商分點資金追蹤")
+    st.caption(
+        "追蹤各券商分公司在個股的買進、賣出與淨買超，並用分點集中度＋"
+        "三大法人流向＋價格確認產生研究候選。券商分點是交易通路，不等於"
+        "最終投資人身分，也不能單獨視為買進理由。"
+    )
+    uploaded_branch_file = st.file_uploader(
+        "上傳券商分點 CSV（選用）",
+        type=["csv"],
+        help=(
+            "可直接上傳 FinMind TaiwanStockTradingDailyReport 格式；"
+            "若未上傳，系統會讀取每日更新的 broker-branches.parquet。"
+        ),
+        key="broker_branch_upload",
+    )
+    branch_trades = load_taiwan_broker_branches(DATA_PIPELINE_VERSION)
+    branch_source = "每日資料庫"
+    if uploaded_branch_file is not None:
+        try:
+            branch_trades = normalize_broker_branch_trades(
+                pd.read_csv(uploaded_branch_file)
+            )
+            branch_source = "本次上傳 CSV"
+        except (ValueError, pd.errors.ParserError) as exc:
+            st.error(f"券商分點 CSV 無法讀取：{exc}")
+            branch_trades = pd.DataFrame()
+
+    if branch_trades.empty:
+        st.info(
+            "券商分點資料庫尚未建立。公開免費的三大法人資料不包含分點；"
+            "完整分點資料需要合法授權來源。系統已支援 FinMind 贊助會員格式，"
+            "也可先上傳你從資料服務商匯出的 CSV。"
+        )
+        sample_branch_csv = pd.DataFrame(
+            {
+                "date": ["2026-08-07", "2026-08-07"],
+                "stock_id": ["2330", "2330"],
+                "securities_trader_id": ["1020", "1021"],
+                "securities_trader": ["券商分點甲", "券商分點乙"],
+                "price": [1000.0, 1000.0],
+                "buy": [100000, 20000],
+                "sell": [10000, 90000],
+            }
+        )
+        st.download_button(
+            "下載券商分點 CSV 範例",
+            sample_branch_csv.to_csv(index=False).encode("utf-8-sig"),
+            file_name="broker-branch-template.csv",
+            mime="text/csv",
+        )
+        st.warning(
+            "在沒有真實分點資料時，系統不會用三大法人資料假造券商分點推薦。"
+        )
+    else:
+        branch_horizon = st.segmented_control(
+            "分點觀察期間",
+            ["今日", "本週", "本月"],
+            default="本週",
+            key="broker_branch_horizon",
+        ) or "本週"
+        branch_window = {"今日": 1, "本週": 5, "本月": 20}[branch_horizon]
+        branch_activity, branch_stocks = aggregate_branch_activity(
+            branch_trades,
+            window=branch_window,
+        )
+        matching_frequency = {"今日": "Daily", "本週": "Weekly", "本月": "Monthly"}[
+            branch_horizon
+        ]
+        branch_institutional, _ = apply_flow_horizon(
+            base_flow_securities,
+            base_flow_groups,
+            matching_frequency,
+        )
+        broker_candidates = build_broker_research_candidates(
+            branch_stocks,
+            branch_institutional,
+            taiwan_master,
+        )
+        branch_date = pd.to_datetime(branch_trades["Date"]).max()
+        branch_metrics = st.columns(4)
+        branch_metrics[0].metric("資料來源", branch_source)
+        branch_metrics[1].metric("資料截止", f"{branch_date:%Y-%m-%d}")
+        branch_metrics[2].metric("涵蓋股票", f"{branch_stocks['Ticker'].nunique():,}")
+        branch_metrics[3].metric("涵蓋分點", f"{branch_activity['Broker ID'].nunique():,}")
+
+        st.markdown("#### 分點訊號推薦股票")
+        st.caption(
+            "分數＝分點集中訊號 50%＋三大法人確認 30%＋價格確認 20%。"
+            "『優先研究』不是自動下單建議，仍需檢查事件、流動性與風險。"
+        )
+        candidate_view = broker_candidates.head(20).copy()
+        candidate_view["最大買超（億）"] = candidate_view["Top buyer value"] / 1e8
+        candidate_view["法人流向（億）"] = candidate_view["Selected net value"] / 1e8
+        st.dataframe(
+            candidate_view[
+                [
+                    "Ticker",
+                    "Name",
+                    "Detailed industry",
+                    "Investment theme",
+                    "Recommendation",
+                    "Research score",
+                    "Top buyer",
+                    "最大買超（億）",
+                    "Positive branch ratio",
+                    "Top 3 buying concentration",
+                    "法人流向（億）",
+                    "Selected return",
+                    "Reason",
+                ]
+            ].rename(
+                columns={
+                    "Ticker": "股票",
+                    "Name": "名稱",
+                    "Detailed industry": "細分產業",
+                    "Investment theme": "投資主題",
+                    "Recommendation": "研究結論",
+                    "Research score": "研究分數",
+                    "Top buyer": "最大買超分點",
+                    "Positive branch ratio": "買超分點占比",
+                    "Top 3 buying concentration": "前三大買盤集中度",
+                    "Selected return": "同期報酬",
+                    "Reason": "原因",
+                }
+            ),
+            column_config={
+                "研究分數": st.column_config.NumberColumn(format="%.1f"),
+                "最大買超（億）": st.column_config.NumberColumn(format="%+.2f"),
+                "法人流向（億）": st.column_config.NumberColumn(format="%+.2f"),
+                "買超分點占比": st.column_config.ProgressColumn(format="%.0%%", min_value=0, max_value=1),
+                "前三大買盤集中度": st.column_config.ProgressColumn(format="%.0%%", min_value=0, max_value=1),
+                "同期報酬": st.column_config.NumberColumn(format="%+.1%%"),
+            },
+            hide_index=True,
+            width="stretch",
+            height=520,
+        )
+
+        chart_columns = st.columns(2)
+        broker_totals = (
+            branch_activity.groupby(["Broker ID", "Broker"], as_index=False)["Net value"]
+            .sum()
+            .sort_values("Net value", ascending=False)
+        )
+        top_brokers = pd.concat(
+            [broker_totals.head(10), broker_totals.tail(10)],
+            ignore_index=True,
+        ).drop_duplicates("Broker ID")
+        with chart_columns[0]:
+            st.markdown("#### 主要分點淨買賣")
+            st.plotly_chart(
+                px.bar(
+                    top_brokers,
+                    x="Net value",
+                    y="Broker",
+                    orientation="h",
+                    color="Net value",
+                    color_continuous_scale=["#ef4444", "#64748b", "#22c55e"],
+                    labels={"Net value": "估算淨買超金額", "Broker": "券商分點"},
+                ).update_layout(height=560, coloraxis_showscale=False),
+                width="stretch",
+            )
+        with chart_columns[1]:
+            st.markdown("#### 候選股：集中度與法人確認")
+            st.plotly_chart(
+                px.scatter(
+                    broker_candidates.head(40),
+                    x="Branch concentration score",
+                    y="Selected net value",
+                    size="Top buyer value",
+                    color="Recommendation",
+                    hover_name="Name",
+                    hover_data=["Ticker", "Top buyer", "Positive branch ratio"],
+                    labels={
+                        "Branch concentration score": "分點集中分數",
+                        "Selected net value": "三大法人估算淨流入",
+                    },
+                ).update_layout(height=560),
+                width="stretch",
+            )
+
+        stock_options = {
+            f"{row['Ticker']}｜{row.get('Name', '')}": row["Ticker"]
+            for _, row in broker_candidates.iterrows()
+        }
+        selected_stock_label = st.selectbox(
+            "查看個股分點明細",
+            list(stock_options),
+            key="broker_branch_stock_detail",
+        )
+        selected_stock = stock_options[selected_stock_label]
+        detail = branch_activity[branch_activity["Ticker"] == selected_stock].copy()
+        detail["淨買超（張）"] = detail["Net shares"] / 1000
+        detail["估算淨買超（億）"] = detail["Net value"] / 1e8
+        st.dataframe(
+            detail[
+                [
+                    "Broker ID",
+                    "Broker",
+                    "Direction",
+                    "淨買超（張）",
+                    "估算淨買超（億）",
+                    "Active days",
+                ]
+            ].rename(
+                columns={
+                    "Broker ID": "分點代號",
+                    "Broker": "券商分點",
+                    "Direction": "方向",
+                    "Active days": "出現天數",
+                }
+            ),
+            hide_index=True,
+            width="stretch",
+            height=440,
+        )
+        st.info(
+            "分點淨買超金額以成交價乘淨買股數估算；同一股票全市場的買進與賣出"
+            "必然互相抵銷，因此本頁研究的是買盤集中在哪些分點，而不是宣稱資金憑空流入股票。"
+        )
 
 with tab_overview:
     metric_columns = st.columns(5)
