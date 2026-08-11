@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from sector_rotation.broker_branch import (
-    fetch_histock_weekly_broker_branches,
+    fetch_histock_broker_branches,
 )
 from sector_rotation.fund_flow import (
     calculate_fund_flow_signals,
@@ -92,37 +92,49 @@ def main() -> None:
             index=False,
         )
 
-    # Keep the branch workload intentionally small: first select the ten stocks
-    # with the strongest five-session institutional inflow, then fetch only
-    # their public seven-calendar-day cumulative branch tables from HiStock.
+    # Keep the branch workload focused: for each research horizon select the ten
+    # stocks with the strongest institutional inflow, then fetch the matching
+    # public cumulative branch table from HiStock.
     broker_cache_path = taiwan_database_dir / "broker-branches.parquet"
     broker_cache = pd.DataFrame()
     broker_status = "no candidates"
     if not stock_flows.empty:
-        focus_tickers = (
-            stock_flows[stock_flows["Asset type"] == "股票"]
-            .nlargest(10, "5D net value")["Ticker"]
-            .str.replace(r"\.(TW|TWO)$", "", regex=True)
-            .tolist()
-        )
+        stock_only = stock_flows[stock_flows["Asset type"] == "股票"].copy()
         fresh_branch_rows = []
-        for ticker in focus_tickers:
-            try:
-                frame = fetch_histock_weekly_broker_branches(ticker)
-            except (OSError, TimeoutError, ValueError):
-                continue
-            if not frame.empty:
-                fresh_branch_rows.append(frame)
+        completed: dict[str, int] = {}
+        for horizon, flow_column in {
+            "Daily": "1D net value",
+            "Weekly": "5D net value",
+            "Monthly": "20D net value",
+        }.items():
+            focus_tickers = (
+                stock_only.nlargest(10, flow_column)["Ticker"]
+                .str.replace(r"\.(TW|TWO)$", "", regex=True)
+                .tolist()
+            )
+            completed[horizon] = 0
+            for ticker in focus_tickers:
+                try:
+                    frame = fetch_histock_broker_branches(ticker, horizon)
+                except (OSError, TimeoutError, ValueError):
+                    continue
+                if not frame.empty:
+                    fresh_branch_rows.append(frame)
+                    completed[horizon] += 1
         if fresh_branch_rows:
             combined = (
                 pd.concat(fresh_branch_rows, ignore_index=True)
-                .drop_duplicates(["Date", "Ticker", "Broker ID"], keep="last")
-                .sort_values(["Ticker", "Broker ID"])
+                .drop_duplicates(
+                    ["Date", "Ticker", "Broker ID", "Horizon"], keep="last"
+                )
+                .sort_values(["Horizon", "Ticker", "Broker ID"])
                 .reset_index(drop=True)
             )
             combined.to_parquet(broker_cache_path, index=False)
             broker_cache = combined
-            broker_status = f"HiStock weekly, {len(fresh_branch_rows)} stocks"
+            broker_status = "HiStock " + ", ".join(
+                f"{horizon}={count}" for horizon, count in completed.items()
+            )
         else:
             broker_status = "no new rows"
     tw_written = build_rotation_snapshots(
