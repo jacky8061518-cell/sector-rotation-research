@@ -42,8 +42,6 @@ jobs:
           prices = pd.read_parquet("data/databases/tw/adjusted-prices.parquet")
           flows = pd.read_parquet("data/databases/tw/institutional-flows.parquet")
           branches = pd.read_parquet("data/databases/tw/broker-branches.parquet")
-          revenue = pd.read_parquet("data/databases/tw/monthly-revenue.parquet")
-          factor_snapshot = pd.read_parquet("data/snapshots/tw/latest-factor-snapshot.parquet")
           price_date = pd.to_datetime(prices.index).max().normalize()
           flow_date = pd.to_datetime(flows["Date"]).max().normalize()
           branch_date = pd.to_datetime(branches["Date"]).max().normalize()
@@ -74,17 +72,13 @@ jobs:
               f"Broker branches through {branch_date:%Y-%m-%d}: "
               f"{branch_stocks} unique stocks, {horizon_stocks}"
           )
-          print(
-              f"Monthly revenue: {len(revenue):,} point-in-time rows; "
-              f"factor snapshot: {len(factor_snapshot):,} stocks"
-          )
           PY
 
       - name: Commit refreshed database
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/databases data/snapshots/tw/latest-factor-snapshot.*
+          git add data/databases
           if git diff --cached --quiet; then
             echo "No market-data changes"
           else
