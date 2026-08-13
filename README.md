@@ -148,6 +148,26 @@ Version 0.8.0 makes fund flow the primary Taiwan research surface:
 - deterministic flow-reason narratives and research-action labels;
 - optional headline lookup for the stocks driving a selected industry's flow.
 
+## 因子研究實驗室（Phase 1）
+
+Phase 1 新增可審查的橫斷面因子骨架，並沿用現有台股 Parquet 價格快取，
+不建立另一套下載流程。應用程式的「因子研究 Phase 1」入口目前提供：
+
+- 由 registry 自動探索的五個價量因子：12–1 動能、六個月動能、60 日低波、
+  252 日低 beta、近五日最大單日報酬；
+- 綁定 `asof` 的 `DataContext`，所有價格、法人、營收與市值資料都會在資料入口
+  硬性截斷，營收則以實際公布時間判斷是否可見；
+- 可設定覆蓋門檻、極值處理、標準化、產業與市值中性化的橫斷面管線，缺值不填補；
+- 月頻 5／20／60 日 Spearman Rank IC、IC IR、Newey-West t 值、正 IC 比率、
+  因子分布、產業暴露與覆蓋率時序；
+- 當 IC IR 高於 1.0 時主動標示資料疑慮，並在畫面揭露現存股票池造成的存活者偏誤
+  與最新產業分類偏誤。
+
+本階段尚未包含分位數多空組合、交易成本與 Portfolio Builder；這些屬於 Phase 2。
+目前既有價格庫只有調整後收盤價，因此成交金額、市值、流動性與法人／營收因子會在
+相應資料的 point-in-time 歷史序列完成後再加入。完整規範見
+[`SPEC_FACTOR_LAB.md`](SPEC_FACTOR_LAB.md)。
+
 SPY is the benchmark. SHY is the defensive asset when the positive-momentum
 filter rejects every sector.
 

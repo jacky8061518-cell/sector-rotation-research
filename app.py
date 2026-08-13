@@ -12,6 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from factors.ui import render_factor_explorer
 from sector_rotation.broker_branch import (
     aggregate_branch_activity,
     build_broker_research_candidates,
@@ -243,6 +244,26 @@ def load_taiwan_price_database(
         start,
         end,
     )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_factor_price_database(
+    tickers: tuple[str, ...],
+    start: date,
+    end: date,
+    pipeline_version: str,
+) -> pd.DataFrame:
+    """Read the existing Taiwan cache for factor research without network calls."""
+    del pipeline_version
+    if not TAIWAN_PRICE_DATABASE.exists():
+        return pd.DataFrame()
+    prices = pd.read_parquet(TAIWAN_PRICE_DATABASE)
+    prices.index = pd.to_datetime(prices.index)
+    available = [ticker for ticker in tickers if ticker in prices]
+    return prices.loc[
+        (prices.index >= pd.Timestamp(start)) & (prices.index < pd.Timestamp(end)),
+        available,
+    ].dropna(how="all")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -832,7 +853,7 @@ st.caption(
 )
 research_section = st.segmented_control(
     "研究模組",
-    ["資金流與輪動回測", "券商分點日週月"],
+    ["資金流與輪動回測", "券商分點日週月", "因子研究 Phase 1"],
     default="券商分點日週月",
 )
 if research_section is None:
@@ -840,6 +861,27 @@ if research_section is None:
 
 if research_section == "券商分點日週月":
     render_lightweight_broker_branch_page()
+    st.stop()
+
+if research_section == "因子研究 Phase 1":
+    factor_master = load_taiwan_security_master()
+    factor_tickers = tuple(
+        dict.fromkeys(
+            [
+                *factor_master.loc[
+                    factor_master["Asset type"].eq("股票"), "Yahoo ticker"
+                ].astype(str),
+                TW_BENCHMARK,
+            ]
+        )
+    )
+    factor_prices = load_factor_price_database(
+        factor_tickers,
+        date.today() - timedelta(days=365 * 5),
+        date.today() + timedelta(days=1),
+        DATA_PIPELINE_VERSION,
+    )
+    render_factor_explorer(factor_prices, factor_master, benchmark=TW_BENCHMARK)
     st.stop()
 
 
