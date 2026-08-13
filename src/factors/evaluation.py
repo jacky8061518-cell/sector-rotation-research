@@ -49,6 +49,11 @@ ContextFactory = Callable[[pd.Timestamp], DataContext]
 DEFAULT_EVALUATION_CONFIG = EvaluationConfig()
 
 
+def _spearman(left: pd.Series, right: pd.Series) -> float:
+    """Spearman rank correlation without the optional SciPy dependency."""
+    return float(left.rank(method="average").corr(right.rank(method="average")))
+
+
 def build_factor_panel(
     factor: Factor,
     context_factory: ContextFactory,
@@ -125,7 +130,7 @@ def compute_rank_ic(
     def rank_correlation(frame: pd.DataFrame, return_column: str) -> float:
         if len(frame) < 3 or frame["score"].nunique(dropna=True) < 2 or frame[return_column].nunique(dropna=True) < 2:
             return float("nan")
-        return float(frame["score"].corr(frame[return_column], method="spearman"))
+        return _spearman(frame["score"], frame[return_column])
 
     rows: dict[str, pd.Series] = {}
     for column in forward_returns.columns:
@@ -228,7 +233,7 @@ def evaluate_quantiles(
     periods_per_year = 252 / horizon
     annualized = period_returns.mean().mul(periods_per_year)
     quantile_numbers = pd.Series(range(1, len(annualized) + 1), index=annualized.index)
-    monotonicity = float(annualized.corr(quantile_numbers, method="spearman")) if len(annualized) >= 2 else float("nan")
+    monotonicity = _spearman(annualized, quantile_numbers) if len(annualized) >= 2 else float("nan")
     return QuantileResult(period_returns, cumulative, annualized, monotonicity)
 
 
@@ -240,7 +245,7 @@ def factor_correlation(score_panels: dict[str, pd.DataFrame]) -> pd.DataFrame:
     for date in dates:
         cross_section = pd.DataFrame({name: panel.loc[date] for name, panel in score_panels.items() if date in panel.index})
         if len(cross_section.columns) >= 2:
-            matrices.append(cross_section.corr(method="spearman"))
+            matrices.append(cross_section.rank(method="average").corr())
     if not matrices:
         return pd.DataFrame(index=names, columns=names, dtype=float)
     return pd.concat(matrices).groupby(level=0).mean().reindex(index=names, columns=names)
@@ -264,7 +269,7 @@ def grouped_rank_ic(
     def correlation(frame: pd.DataFrame) -> float:
         if len(frame) < 3 or frame["score"].nunique() < 2 or frame[column].nunique() < 2:
             return float("nan")
-        return float(frame["score"].corr(frame[column], method="spearman"))
+        return _spearman(frame["score"], frame[column])
 
     result = (
         paired.dropna(subset=["group"])
