@@ -2,5 +2,3 @@
 # Keep deployment dependencies explicit so Streamlit Community Cloud invalidates
 # its environment cache when the factor research stack changes.
 pyarrow>=18,<25
-scipy>=1.14,<2
-statsmodels>=0.14,<1

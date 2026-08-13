@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 
 from .config import PipelineConfig, StandardizeMethod, WinsorMethod
 from .spec import FactorSpec
@@ -87,7 +87,8 @@ def standardize_cross_section(
             result.loc[valid.index] = (valid - float(valid.mean())) / deviation
     elif method == "rank_normal":
         probabilities = (valid.rank(method="average") - 0.5) / len(valid)
-        result.loc[valid.index] = norm.ppf(probabilities)
+        normal = NormalDist()
+        result.loc[valid.index] = probabilities.map(normal.inv_cdf)
     else:
         raise ValueError(f"Unknown standardization method: {method}")
     return result

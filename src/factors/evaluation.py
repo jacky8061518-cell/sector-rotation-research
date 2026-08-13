@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 
 from .config import EvaluationConfig
 from .context import DataContext
@@ -160,8 +159,15 @@ def summarize_ic(
         lags = min(observations - 1, max(0, horizon - 1))
     newey_west_t = float("nan")
     if observations >= 2:
-        model = sm.OLS(valid.to_numpy(), np.ones((observations, 1))).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
-        newey_west_t = float(model.tvalues[0])
+        centered = valid.to_numpy(dtype=float) - mean
+        long_run_variance = float(np.dot(centered, centered) / observations)
+        for lag in range(1, lags + 1):
+            weight = 1.0 - lag / (lags + 1)
+            covariance = float(np.dot(centered[lag:], centered[:-lag]) / observations)
+            long_run_variance += 2 * weight * covariance
+        standard_error = np.sqrt(max(long_run_variance, 0) / observations)
+        if standard_error > 0:
+            newey_west_t = float(mean / standard_error)
     return ICSummary(
         horizon=horizon,
         observations=observations,
