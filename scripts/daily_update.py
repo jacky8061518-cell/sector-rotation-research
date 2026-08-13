@@ -7,6 +7,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from factors.context import FactorDataStore
+from factors.data_tw import (
+    normalize_institutional_flows,
+    save_universe_snapshot,
+    update_financial_cache,
+    update_monthly_revenue_cache,
+)
+from factors.snapshots import build_daily_factor_snapshot, update_market_cap_snapshot
 from sector_rotation.broker_branch import (
     fetch_histock_broker_branches,
 )
@@ -42,6 +50,10 @@ def main() -> None:
         taiwan_database_dir / "security-master.csv",
         index=False,
     )
+    save_universe_snapshot(
+        taiwan_master,
+        taiwan_database_dir / "universe-snapshots",
+    )
     taiwan_assets = all_taiwan_research_assets(taiwan_master)
     taiwan_tickers = list(
         dict.fromkeys([*taiwan_assets, TW_BENCHMARK, TW_DEFENSIVE_ASSET])
@@ -74,6 +86,29 @@ def main() -> None:
         # be evaluated across roughly 52 independent rebalance observations.
         tw_prices.index[-270:],
     )
+    try:
+        revenue = update_monthly_revenue_cache(
+            taiwan_database_dir / "monthly-revenue.parquet"
+        )
+    except (OSError, TimeoutError, ValueError):
+        revenue_path = taiwan_database_dir / "monthly-revenue.parquet"
+        revenue = pd.read_parquet(revenue_path) if revenue_path.exists() else pd.DataFrame()
+    market_cap = update_market_cap_snapshot(
+        taiwan_database_dir / "market-cap.parquet",
+        tw_prices,
+        taiwan_master,
+    )
+    try:
+        financials = update_financial_cache(
+            taiwan_database_dir / "financials-pit.parquet"
+        )
+    except (OSError, TimeoutError, ValueError):
+        financial_path = taiwan_database_dir / "financials-pit.parquet"
+        financials = (
+            pd.read_parquet(financial_path)
+            if financial_path.exists()
+            else pd.DataFrame()
+        )
     stock_flows, industry_flows = calculate_fund_flow_signals(
         tw_prices,
         institutional_flows,
@@ -81,6 +116,30 @@ def main() -> None:
     )
     taiwan_snapshot_dir = SNAPSHOT_ROOT / "tw"
     taiwan_snapshot_dir.mkdir(parents=True, exist_ok=True)
+    factor_universe = pd.DataFrame(
+        {
+            "ticker": taiwan_master.loc[taiwan_master["Asset type"].eq("股票"), "Yahoo ticker"],
+            "market": "TW",
+            "industry": taiwan_master.loc[taiwan_master["Asset type"].eq("股票"), "Industry"],
+            "eligible": True,
+        }
+    )
+    factor_store = FactorDataStore(
+        pd.DataFrame(columns=["date", "ticker", "adj_close"]),
+        factor_universe,
+        market_cap_data=market_cap,
+        inst_flow_data=normalize_institutional_flows(institutional_flows),
+        revenue_data=revenue,
+        financial_data=financials,
+        adjusted_close_wide=tw_prices,
+    )
+    factor_snapshot = build_daily_factor_snapshot(
+        tw_prices,
+        taiwan_master,
+        factor_store,
+        taiwan_snapshot_dir / "latest-factor-snapshot.parquet",
+        benchmark=TW_BENCHMARK,
+    )
     if not stock_flows.empty:
         stock_flows.to_csv(
             taiwan_snapshot_dir / "latest-stock-fund-flow.csv",
@@ -165,7 +224,8 @@ def main() -> None:
         f"TW prices: {coverage['In price database'].sum()} tickers through "
         f"{tw_prices.index.max():%Y-%m-%d}, "
         f"{len(tw_written)} files; broker branches: {broker_status}, "
-        f"{len(broker_cache):,} cached rows"
+        f"{len(broker_cache):,} cached rows; factor snapshot: "
+        f"{len(factor_snapshot):,} stocks"
     )
 
 

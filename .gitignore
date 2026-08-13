@@ -18,5 +18,14 @@ data/databases/tw/*
 !data/databases/tw/security-master.csv
 !data/databases/tw/coverage-report.csv
 !data/databases/tw/broker-branches.parquet
+!data/databases/tw/monthly-revenue.parquet
+!data/databases/tw/market-cap.parquet
+!data/databases/tw/financials-pit.parquet
+!data/databases/tw/universe-snapshots/
+!data/databases/tw/universe-snapshots/*.parquet
 data/cache/
-data/snapshots/
+data/snapshots/*
+!data/snapshots/tw/
+data/snapshots/tw/*
+!data/snapshots/tw/latest-factor-snapshot.parquet
+!data/snapshots/tw/latest-factor-snapshot.csv

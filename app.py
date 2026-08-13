@@ -12,6 +12,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from factors.data_tw import load_optional_panel, normalize_institutional_flows
+from factors.ui import render_factor_lab
 from sector_rotation.broker_branch import (
     aggregate_branch_activity,
     build_broker_research_candidates,
@@ -104,6 +106,9 @@ DATA_PIPELINE_VERSION = "0.9.1-broker-branch-horizons"
 PROJECT_ROOT = Path(__file__).resolve().parent
 TAIWAN_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "adjusted-prices.parquet"
 TAIWAN_FLOW_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "institutional-flows.parquet"
+TAIWAN_REVENUE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "monthly-revenue.parquet"
+TAIWAN_MARKET_CAP_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "market-cap.parquet"
+TAIWAN_FINANCIAL_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "financials-pit.parquet"
 TAIWAN_BROKER_BRANCH_DATABASE = (
     PROJECT_ROOT / "data" / "databases" / "tw" / "broker-branches.parquet"
 )
@@ -243,6 +248,26 @@ def load_taiwan_price_database(
         start,
         end,
     )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_factor_price_database(
+    tickers: tuple[str, ...],
+    start: date,
+    end: date,
+    pipeline_version: str,
+) -> pd.DataFrame:
+    """Read the existing Taiwan cache for factor research without network calls."""
+    del pipeline_version
+    if not TAIWAN_PRICE_DATABASE.exists():
+        return pd.DataFrame()
+    prices = pd.read_parquet(TAIWAN_PRICE_DATABASE)
+    prices.index = pd.to_datetime(prices.index)
+    available = [ticker for ticker in tickers if ticker in prices]
+    return prices.loc[
+        (prices.index >= pd.Timestamp(start)) & (prices.index < pd.Timestamp(end)),
+        available,
+    ].dropna(how="all")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -832,7 +857,7 @@ st.caption(
 )
 research_section = st.segmented_control(
     "研究模組",
-    ["資金流與輪動回測", "券商分點日週月"],
+    ["資金流與輪動回測", "券商分點日週月", "因子研究實驗室"],
     default="券商分點日週月",
 )
 if research_section is None:
@@ -840,6 +865,38 @@ if research_section is None:
 
 if research_section == "券商分點日週月":
     render_lightweight_broker_branch_page()
+    st.stop()
+
+if research_section == "因子研究實驗室":
+    factor_master = load_taiwan_security_master()
+    factor_tickers = tuple(
+        dict.fromkeys(
+            [
+                *factor_master.loc[
+                    factor_master["Asset type"].eq("股票"), "Yahoo ticker"
+                ].astype(str),
+                TW_BENCHMARK,
+            ]
+        )
+    )
+    factor_prices = load_factor_price_database(
+        factor_tickers,
+        date.today() - timedelta(days=365 * 5),
+        date.today() + timedelta(days=1),
+        DATA_PIPELINE_VERSION,
+    )
+    factor_flows = normalize_institutional_flows(
+        load_taiwan_institutional_flows(DATA_PIPELINE_VERSION)
+    )
+    render_factor_lab(
+        factor_prices,
+        factor_master,
+        benchmark=TW_BENCHMARK,
+        inst_flow=factor_flows,
+        revenue=load_optional_panel(TAIWAN_REVENUE_DATABASE),
+        market_cap=load_optional_panel(TAIWAN_MARKET_CAP_DATABASE),
+        financials=load_optional_panel(TAIWAN_FINANCIAL_DATABASE),
+    )
     st.stop()
 
 
