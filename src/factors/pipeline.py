@@ -108,15 +108,11 @@ def neutralize_cross_section(
         if industry is None:
             raise ValueError("industry is required for industry neutralization.")
         categories = industry.reindex(clean.index).astype("string")
-        design_parts.append(
-            pd.get_dummies(categories, prefix="industry", drop_first=True, dtype=float)
-        )
+        design_parts.append(pd.get_dummies(categories, prefix="industry", drop_first=True, dtype=float))
     if neutralize_size:
         if log_market_cap is None:
             raise ValueError("log_market_cap is required for size neutralization.")
-        design_parts.append(
-            _finite(log_market_cap.reindex(clean.index)).rename("log_market_cap").to_frame()
-        )
+        design_parts.append(_finite(log_market_cap.reindex(clean.index)).rename("log_market_cap").to_frame())
     if not design_parts:
         return clean
     design = pd.concat(design_parts, axis=1)

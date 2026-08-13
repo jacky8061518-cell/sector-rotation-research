@@ -12,6 +12,7 @@ import statsmodels.api as sm
 from .config import EvaluationConfig
 from .context import DataContext
 from .pipeline import PipelineDiagnostics, preprocess_factor
+from .portfolio import assign_quantiles
 from .spec import Factor
 
 
@@ -35,6 +36,14 @@ class EvaluationResult:
     summaries: tuple[ICSummary, ...]
     coverage: pd.Series
     diagnostics: tuple[PipelineDiagnostics, ...]
+
+
+@dataclass(frozen=True)
+class QuantileResult:
+    period_returns: pd.DataFrame
+    cumulative_returns: pd.DataFrame
+    annualized_returns: pd.Series
+    monotonicity: float
 
 
 ContextFactory = Callable[[pd.Timestamp], DataContext]
@@ -115,11 +124,7 @@ def compute_rank_ic(
     paired = forward_returns.join(score_series, how="inner")
 
     def rank_correlation(frame: pd.DataFrame, return_column: str) -> float:
-        if (
-            len(frame) < 3
-            or frame["score"].nunique(dropna=True) < 2
-            or frame[return_column].nunique(dropna=True) < 2
-        ):
+        if len(frame) < 3 or frame["score"].nunique(dropna=True) < 2 or frame[return_column].nunique(dropna=True) < 2:
             return float("nan")
         return float(frame["score"].corr(frame[return_column], method="spearman"))
 
@@ -148,18 +153,14 @@ def summarize_ic(
     mean = float(valid.mean())
     standard_deviation = float(valid.std(ddof=1)) if observations > 1 else float("nan")
     information_ratio = (
-        mean / standard_deviation
-        if np.isfinite(standard_deviation) and standard_deviation > 0
-        else float("nan")
+        mean / standard_deviation if np.isfinite(standard_deviation) and standard_deviation > 0 else float("nan")
     )
     lags = newey_west_lags
     if lags is None:
         lags = min(observations - 1, max(0, horizon - 1))
     newey_west_t = float("nan")
     if observations >= 2:
-        model = sm.OLS(valid.to_numpy(), np.ones((observations, 1))).fit(
-            cov_type="HAC", cov_kwds={"maxlags": lags}
-        )
+        model = sm.OLS(valid.to_numpy(), np.ones((observations, 1))).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
         newey_west_t = float(model.tvalues[0])
     return ICSummary(
         horizon=horizon,
@@ -180,12 +181,8 @@ def evaluate_factor(
     signal_dates: Sequence[pd.Timestamp],
     config: EvaluationConfig = DEFAULT_EVALUATION_CONFIG,
 ) -> EvaluationResult:
-    scores, coverage, diagnostics = build_factor_panel(
-        factor, context_factory, signal_dates, config
-    )
-    forward_returns = compute_forward_returns(
-        adjusted_close, config.horizons, signal_dates=signal_dates
-    )
+    scores, coverage, diagnostics = build_factor_panel(factor, context_factory, signal_dates, config)
+    forward_returns = compute_forward_returns(adjusted_close, config.horizons, signal_dates=signal_dates)
     ic = compute_rank_ic(scores, forward_returns)
     summaries = tuple(
         summarize_ic(
@@ -196,3 +193,76 @@ def evaluate_factor(
         for horizon in config.horizons
     )
     return EvaluationResult(scores, forward_returns, ic, summaries, coverage, diagnostics)
+
+
+def evaluate_quantiles(
+    scores: pd.DataFrame,
+    forward_returns: pd.DataFrame,
+    *,
+    horizon: int = 20,
+    quantiles: int = 5,
+) -> QuantileResult:
+    column = f"forward_{horizon}d"
+    if scores.empty or column not in forward_returns:
+        empty = pd.DataFrame()
+        return QuantileResult(empty, empty, pd.Series(dtype=float), float("nan"))
+    score_series = scores.rename_axis(index="date", columns="ticker").stack(future_stack=True).dropna().rename("score")
+    paired = forward_returns[[column]].join(score_series, how="inner").dropna()
+    paired["quantile"] = paired.groupby(level="date")["score"].transform(
+        lambda values: assign_quantiles(values, quantiles).reindex(values.index)
+    )
+    period_returns = (
+        paired.dropna(subset=["quantile"])
+        .groupby([paired.dropna(subset=["quantile"]).index.get_level_values("date"), "quantile"])[column]
+        .mean()
+        .unstack("quantile")
+    )
+    period_returns.columns = [f"Q{int(item)}" for item in period_returns.columns]
+    cumulative = period_returns.add(1).cumprod().sub(1)
+    periods_per_year = 252 / horizon
+    annualized = period_returns.mean().mul(periods_per_year)
+    quantile_numbers = pd.Series(range(1, len(annualized) + 1), index=annualized.index)
+    monotonicity = float(annualized.corr(quantile_numbers, method="spearman")) if len(annualized) >= 2 else float("nan")
+    return QuantileResult(period_returns, cumulative, annualized, monotonicity)
+
+
+def factor_correlation(score_panels: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Average same-date cross-sectional factor correlation matrix."""
+    names = list(score_panels)
+    matrices = []
+    dates = sorted(set().union(*(panel.index for panel in score_panels.values()))) if score_panels else []
+    for date in dates:
+        cross_section = pd.DataFrame({name: panel.loc[date] for name, panel in score_panels.items() if date in panel.index})
+        if len(cross_section.columns) >= 2:
+            matrices.append(cross_section.corr(method="spearman"))
+    if not matrices:
+        return pd.DataFrame(index=names, columns=names, dtype=float)
+    return pd.concat(matrices).groupby(level=0).mean().reindex(index=names, columns=names)
+
+
+def grouped_rank_ic(
+    scores: pd.DataFrame,
+    forward_returns: pd.DataFrame,
+    groups: pd.Series,
+    *,
+    horizon: int = 20,
+) -> pd.DataFrame:
+    """Recompute rank IC inside each supplied market, industry, or size group."""
+    column = f"forward_{horizon}d"
+    if scores.empty or column not in forward_returns:
+        return pd.DataFrame()
+    long_scores = scores.rename_axis(index="date", columns="ticker").stack(future_stack=True).dropna().rename("score")
+    paired = forward_returns[[column]].join(long_scores, how="inner").dropna()
+    paired["group"] = groups.reindex(paired.index.get_level_values("ticker")).to_numpy()
+
+    def correlation(frame: pd.DataFrame) -> float:
+        if len(frame) < 3 or frame["score"].nunique() < 2 or frame[column].nunique() < 2:
+            return float("nan")
+        return float(frame["score"].corr(frame[column], method="spearman"))
+
+    result = (
+        paired.dropna(subset=["group"])
+        .groupby([paired.dropna(subset=["group"]).index.get_level_values("date"), "group"])
+        .apply(correlation, include_groups=False)
+    )
+    return result.unstack("group").sort_index()

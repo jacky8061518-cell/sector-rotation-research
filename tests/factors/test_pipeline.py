@@ -43,9 +43,7 @@ def test_zscore_uses_only_one_cross_section() -> None:
 def test_neutralization_removes_size_loading() -> None:
     size = pd.Series([1.0, 2.0, 3.0, 4.0], index=list("abcd"))
     values = 2.0 + 3.0 * size
-    result = neutralize_cross_section(
-        values, log_market_cap=size, neutralize_industry=False, neutralize_size=True
-    )
+    result = neutralize_cross_section(values, log_market_cap=size, neutralize_industry=False, neutralize_size=True)
 
     assert np.allclose(result.dropna(), 0.0, atol=1e-12)
 

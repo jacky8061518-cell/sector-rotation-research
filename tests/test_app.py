@@ -13,7 +13,7 @@ def test_app_renders_lightweight_broker_page():
     assert app.segmented_control[0].options == [
         "資金流與輪動回測",
         "券商分點日週月",
-        "因子研究 Phase 1",
+        "因子研究實驗室",
     ]
     assert any("當日法人流入前 10 檔" in item.value for item in app.markdown)
     assert len(app.metric) >= 4
@@ -24,10 +24,28 @@ def test_app_renders_factor_explorer_page():
     os.environ["SECTOR_ROTATION_TEST_MODE"] = "1"
     app = AppTest.from_file("app.py", default_timeout=60)
     app.run()
-    app.segmented_control[0].set_value("因子研究 Phase 1").run(timeout=60)
+    app.segmented_control[0].set_value("因子研究實驗室").run(timeout=60)
 
     assert not app.exception
     assert any("Factor Explorer" in item.value for item in app.subheader)
     assert any("存活者偏誤" in item.value for item in app.warning)
     assert len(app.dataframe) >= 1
+    del os.environ["SECTOR_ROTATION_TEST_MODE"]
+
+
+def test_factor_lab_portfolio_and_snapshot_pages():
+    os.environ["SECTOR_ROTATION_TEST_MODE"] = "1"
+    app = AppTest.from_file("app.py", default_timeout=60)
+    app.run()
+    app.segmented_control[0].set_value("因子研究實驗室").run(timeout=60)
+    app.segmented_control[1].set_value("Portfolio Builder").run(timeout=60)
+
+    assert not app.exception
+    assert any("Portfolio Builder" in item.value for item in app.subheader)
+    assert len(app.download_button) == 3
+
+    app.segmented_control[1].set_value("最新橫斷面").run(timeout=60)
+    assert not app.exception
+    assert any("Cross-section Snapshot" in item.value for item in app.subheader)
+    assert len(app.download_button) == 1
     del os.environ["SECTOR_ROTATION_TEST_MODE"]

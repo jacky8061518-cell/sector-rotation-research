@@ -15,9 +15,7 @@ PriceField = Literal["adj_close", "close", "volume", "traded_value"]
 
 
 def _empty_panel(columns: Sequence[str] = ()) -> pd.DataFrame:
-    index = pd.MultiIndex.from_arrays(
-        [pd.DatetimeIndex([], name="date"), pd.Index([], name="ticker")]
-    )
+    index = pd.MultiIndex.from_arrays([pd.DatetimeIndex([], name="date"), pd.Index([], name="ticker")])
     return pd.DataFrame(index=index, columns=list(columns), dtype=float)
 
 
@@ -48,6 +46,7 @@ class FactorDataStore:
     market_cap_data: pd.DataFrame = field(default_factory=_empty_panel)
     inst_flow_data: pd.DataFrame = field(default_factory=_empty_panel)
     revenue_data: pd.DataFrame = field(default_factory=_empty_panel)
+    financial_data: pd.DataFrame = field(default_factory=_empty_panel)
     adjusted_close_wide: pd.DataFrame | None = None
 
     def __post_init__(self) -> None:
@@ -55,10 +54,35 @@ class FactorDataStore:
         object.__setattr__(self, "market_cap_data", _normalize_panel(self.market_cap_data))
         object.__setattr__(self, "inst_flow_data", _normalize_panel(self.inst_flow_data))
         object.__setattr__(self, "revenue_data", _normalize_panel(self.revenue_data))
+        object.__setattr__(self, "financial_data", _normalize_panel(self.financial_data))
         if self.adjusted_close_wide is not None:
             wide = self.adjusted_close_wide.copy()
             wide.index = pd.to_datetime(wide.index)
             object.__setattr__(self, "adjusted_close_wide", wide.sort_index())
+
+    def has_requirement(self, requirement: str) -> bool:
+        """Report whether a factor dependency has a usable backing column."""
+        table, _, column = requirement.partition(".")
+        if table == "prices":
+            if not column or column == "adj_close":
+                return self.adjusted_close_wide is not None or "adj_close" in self.price_data
+            return column in self.price_data
+        if table == "industry":
+            return "industry" in self.universe_data
+        frames = {
+            "market_cap": self.market_cap_data,
+            "inst_flow": self.inst_flow_data,
+            "revenue": self.revenue_data,
+            "financials": self.financial_data,
+        }
+        frame = frames.get(table)
+        if frame is None or frame.empty:
+            return False
+        expected = column or table
+        return expected in frame.columns
+
+    def supports(self, requirements: Sequence[str]) -> bool:
+        return all(self.has_requirement(requirement) for requirement in requirements)
 
 
 @dataclass(frozen=True)
@@ -93,25 +117,24 @@ class DataContext:
             raise ValueError("window must be positive when provided.")
         if frame.empty:
             return frame.copy()
+        visible_frame = frame
+        if knowledge_column is not None:
+            if knowledge_column not in visible_frame:
+                raise ValueError(f"Missing point-in-time column: {knowledge_column}")
+            known = pd.to_datetime(visible_frame[knowledge_column], errors="coerce")
+            visible_frame = visible_frame.loc[known.notna() & known.le(self.asof)]
+            if visible_frame.empty:
+                return visible_frame.copy()
         date_level = frame.index.names.index("date")
-        sessions = pd.DatetimeIndex(frame.index.levels[date_level])
+        sessions = pd.DatetimeIndex(visible_frame.index.get_level_values(date_level).unique()).sort_values()
         visible_sessions = sessions[sessions <= self.asof]
         if visible_sessions.empty:
             return frame.iloc[0:0].copy()
-        start = (
-            visible_sessions[0]
-            if window is None
-            else visible_sessions[max(0, len(visible_sessions) - window)]
-        )
+        start = visible_sessions[0] if window is None else visible_sessions[max(0, len(visible_sessions) - window)]
         try:
-            result = frame.loc[pd.IndexSlice[start : self.asof, :], :].copy()
+            result = visible_frame.loc[pd.IndexSlice[start : self.asof, :], :].copy()
         except KeyError:
-            return frame.iloc[0:0].copy()
-        if knowledge_column is not None:
-            if knowledge_column not in result:
-                raise ValueError(f"Missing point-in-time column: {knowledge_column}")
-            known = pd.to_datetime(result[knowledge_column], errors="coerce")
-            result = result.loc[known.notna() & known.le(self.asof)]
+            return visible_frame.iloc[0:0].copy()
         allowed = self.universe().union(pd.Index([self.benchmark]))
         return result.loc[result.index.get_level_values("ticker").isin(allowed)]
 
@@ -144,6 +167,10 @@ class DataContext:
 
     def revenue(self, window: int | None = None) -> pd.DataFrame:
         return self._slice(self.store.revenue_data, window, knowledge_column="published_at")
+
+    def financials(self, window: int | None = None) -> pd.DataFrame:
+        """Return only statements known by the as-of time."""
+        return self._slice(self.store.financial_data, window, knowledge_column="published_at")
 
     def universe(self) -> pd.Index:
         frame = self.store.universe_data

@@ -148,25 +148,30 @@ Version 0.8.0 makes fund flow the primary Taiwan research surface:
 - deterministic flow-reason narratives and research-action labels;
 - optional headline lookup for the stocks driving a selected industry's flow.
 
-## 因子研究實驗室（Phase 1）
+## 因子研究實驗室（完整 Phase 1–5）
 
-Phase 1 新增可審查的橫斷面因子骨架，並沿用現有台股 Parquet 價格快取，
-不建立另一套下載流程。應用程式的「因子研究 Phase 1」入口目前提供：
+Factor Research Lab 已直接整合在同一個 `app.py` 與既有
+[台股資金流網站](https://taiwan-fund-flow-lab.streamlit.app)，沿用原本價格、法人與
+公司主檔快取，不建立平行下載系統。入口「因子研究實驗室」包含 Explorer、Factor
+Zoo、Portfolio Builder 與最新橫斷面四個研究工具：
 
-- 由 registry 自動探索的五個價量因子：12–1 動能、六個月動能、60 日低波、
-  252 日低 beta、近五日最大單日報酬；
+- registry 自動探索價量、風險、流動性、法人、月營收、價值、品質與成長因子；
 - 綁定 `asof` 的 `DataContext`，所有價格、法人、營收與市值資料都會在資料入口
-  硬性截斷，營收則以實際公布時間判斷是否可見；
+  硬性截斷，營收與財報以實際出表／擷取時間判斷是否可見；
 - 可設定覆蓋門檻、極值處理、標準化、產業與市值中性化的橫斷面管線，缺值不填補；
 - 月頻 5／20／60 日 Spearman Rank IC、IC IR、Newey-West t 值、正 IC 比率、
-  因子分布、產業暴露與覆蓋率時序；
+  五分位單調性、因子相關矩陣、分布、產業暴露與覆蓋率時序；
+- 訊號日後下一交易日收盤成交的多空／多頭回測，支援等權、分數與逆波動權重；
+- 台股手續費、折扣、賣出交易稅與滑價模型，並排顯示含成本與未含成本績效；
+- 每日保存股票池、市值、MOPS 月營收與一般產業財報的 point-in-time 快照，並輸出
+  最新全市場因子排名 CSV／Parquet；
 - 當 IC IR 高於 1.0 時主動標示資料疑慮，並在畫面揭露現存股票池造成的存活者偏誤
   與最新產業分類偏誤。
 
-本階段尚未包含分位數多空組合、交易成本與 Portfolio Builder；這些屬於 Phase 2。
-目前既有價格庫只有調整後收盤價，因此成交金額、市值、流動性與法人／營收因子會在
-相應資料的 point-in-time 歷史序列完成後再加入。完整規範見
-[`SPEC_FACTOR_LAB.md`](SPEC_FACTOR_LAB.md)。
+正式評估只顯示在當時已有可靠資料的因子。MOPS OpenAPI 只提供目前出表內容，因此
+月營收與財報歷史會從本版上線日起逐日累積；金融、保險及證券業的異質會計格式暫不
+強行映射。`turnover_20d` 與完整市值歷史也會等每日快照累積足夠期間後啟用。完整規範
+見 [`SPEC_FACTOR_LAB.md`](SPEC_FACTOR_LAB.md)。
 
 SPY is the benchmark. SHY is the defensive asset when the positive-momentum
 filter rejects every sector.
@@ -269,15 +274,13 @@ available trading session.
 
 ## Current scope
 
-Version 0.8.0 focuses on fund-flow-first Taiwan research, complete Taiwan
-listed/OTC stock and ETF coverage, institutional fund-flow confirmation, and
-ETF constituent leadership. Logical
-future extensions include:
+Version 1.0 combines fund-flow-first Taiwan research with a point-in-time
+cross-sectional factor laboratory. Remaining research extensions include:
 
 1. walk-forward parameter testing;
 2. subperiod and market-regime analysis;
 3. bootstrap confidence intervals;
-4. fundamental and quality factors inside selected sectors;
+4. licensed TEJ historical announcement data for pre-launch fundamentals;
 5. downloadable research reports and target allocations.
 
 ## Important limitations

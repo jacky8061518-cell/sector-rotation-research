@@ -40,8 +40,7 @@ def list_factors(
     specs = (
         factor.spec
         for factor in factors
-        if (market is None or market in factor.spec.markets)
-        and (category is None or factor.spec.category == category)
+        if (market is None or market in factor.spec.markets) and (category is None or factor.spec.category == category)
     )
     return tuple(sorted(specs, key=lambda spec: spec.name))
 
