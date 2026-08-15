@@ -38,6 +38,23 @@ def test_rank_ic_uses_cross_sectional_spearman() -> None:
     assert result.loc[dates[0], "forward_1d"] == 1.0
 
 
+def test_rank_ic_keeps_horizon_with_no_usable_observations() -> None:
+    signal_date = pd.Timestamp("2025-01-02")
+    scores = pd.DataFrame([[1.0, 2.0, 3.0]], index=[signal_date], columns=list("ABC"))
+    forward = pd.DataFrame(
+        {
+            "forward_5d": [0.01, 0.02, 0.03],
+            "forward_60d": [np.nan, np.nan, np.nan],
+        },
+        index=pd.MultiIndex.from_product([[signal_date], list("ABC")], names=["date", "ticker"]),
+    )
+
+    result = compute_rank_ic(scores, forward)
+
+    assert result.loc[signal_date, "forward_5d"] == pytest.approx(1.0)
+    assert result["forward_60d"].isna().all()
+
+
 def test_ic_summary_flags_implausibly_high_ir() -> None:
     summary = summarize_ic(pd.Series([0.20, 0.21, 0.19, 0.20]), 5, newey_west_lags=1)
 

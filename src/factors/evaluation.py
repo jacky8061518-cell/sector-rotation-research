@@ -135,12 +135,15 @@ def compute_rank_ic(
     rows: dict[str, pd.Series] = {}
     for column in forward_returns.columns:
         valid = paired[["score", column]].dropna()
-        current_column = column
-        rows[column] = valid.groupby(level="date").apply(
-            lambda frame, name=current_column: rank_correlation(frame, name),
-            include_groups=False,
-        )
-    result = pd.DataFrame(rows).sort_index()
+        if valid.empty:
+            rows[column] = pd.Series(dtype=float)
+            continue
+        correlations = {
+            pd.Timestamp(signal_date): rank_correlation(frame, column)
+            for signal_date, frame in valid.groupby(level="date", sort=True)
+        }
+        rows[column] = pd.Series(correlations, dtype=float)
+    result = pd.concat(rows, axis=1).sort_index() if rows else pd.DataFrame()
     result.index.name = "date"
     return result
 
