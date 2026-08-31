@@ -218,7 +218,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00964,00964.TW,中信亞太高股息,上市,ETF,海外股票 ETF,442,True,True
 00965,00965.TW,元大航太防衛科技,上市,ETF,海外股票 ETF,439,True,True
 00971,00971.TW,野村美國研發龍頭,上市,ETF,海外股票 ETF,381,True,True
-00972,00972.TW,野村日本動能高息,上市,ETF,海外股票 ETF,5,True,False
+00972,00972.TW,野村日本動能高息,上市,ETF,海外股票 ETF,2,True,False
 009800,009800.TW,中信NASDAQ,上市,ETF,海外股票 ETF,381,True,True
 009801,009801.TW,中信美國創新科技,上市,ETF,海外股票 ETF,381,True,True
 009805,009805.TW,台新美國電力基建,上市,ETF,海外股票 ETF,326,True,True
@@ -234,7 +234,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 009821,009821.TW,野村稀土關鍵資源,上市,ETF,海外股票 ETF,56,True,False
 009824,009824.TW,群益美國科技巨頭ETF基金,上市,ETF,海外股票 ETF,51,True,False
 009826,009826.TW,貝萊德世界股票,上市,ETF,海外股票 ETF,19,True,False
-009829,009829.TW,大華韓國KOSPI 50,上市,ETF,海外股票 ETF,5,True,False
+009829,009829.TW,大華韓國KOSPI 50,上市,ETF,海外股票 ETF,7,True,False
 00982T,00982T.TW,平衡兆豐台美動能,上市,ETF,海外股票 ETF,170,True,False
 00411A,00411A.TWO,主動統一前沿科技,上櫃,ETF,主動式 ETF,9,True,False
 00980D,00980D.TWO,主動聯博投等入息,上櫃,ETF,主動式 ETF,267,True,True
@@ -1881,7 +1881,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 4743,4743.TWO,合一,上櫃,股票,生技醫療,3577,True,True
 4744,4744.TWO,皇將,上櫃,股票,生技醫療,3469,True,True
 4745,4745.TWO,合富-KY,上櫃,股票,生技醫療,3470,True,True
-4747,4747.TWO,強生製藥,上櫃,股票,生技醫療,3461,True,True
+4747,4747.TWO,強生*,上櫃,股票,生技醫療,3461,True,True
 4905,4905.TWO,台聯電,上櫃,股票,生技醫療,3581,True,True
 4911,4911.TWO,德英,上櫃,股票,生技醫療,3581,True,True
 5312,5312.TWO,寶島科,上櫃,股票,生技醫療,3581,True,True
