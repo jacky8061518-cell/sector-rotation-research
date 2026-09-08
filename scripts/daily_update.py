@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from http.client import IncompleteRead
 from pathlib import Path
 
 import pandas as pd
@@ -90,7 +91,7 @@ def main() -> None:
         revenue = update_monthly_revenue_cache(
             taiwan_database_dir / "monthly-revenue.parquet"
         )
-    except (OSError, TimeoutError, ValueError):
+    except (OSError, TimeoutError, ValueError, IncompleteRead):
         revenue_path = taiwan_database_dir / "monthly-revenue.parquet"
         revenue = pd.read_parquet(revenue_path) if revenue_path.exists() else pd.DataFrame()
     market_cap = update_market_cap_snapshot(
@@ -102,7 +103,7 @@ def main() -> None:
         financials = update_financial_cache(
             taiwan_database_dir / "financials-pit.parquet"
         )
-    except (OSError, TimeoutError, ValueError):
+    except (OSError, TimeoutError, ValueError, IncompleteRead):
         financial_path = taiwan_database_dir / "financials-pit.parquet"
         financials = (
             pd.read_parquet(financial_path)
