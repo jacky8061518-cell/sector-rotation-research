@@ -44,11 +44,20 @@ SNAPSHOT_ROOT = PROJECT_ROOT / "data" / "snapshots"
 
 
 def main() -> None:
-    taiwan_master = fetch_taiwan_security_master()
     taiwan_database_dir = DATABASE_DIR / "tw"
     taiwan_database_dir.mkdir(parents=True, exist_ok=True)
+    master_path = taiwan_database_dir / "security-master.csv"
+    try:
+        taiwan_master = fetch_taiwan_security_master()
+    except (OSError, TimeoutError, ValueError, IncompleteRead):
+        if not master_path.exists():
+            raise
+        # The exchange constituent endpoints occasionally cut off a response.
+        # Preserve the last complete universe rather than preventing price and
+        # institutional-flow updates for the whole research application.
+        taiwan_master = pd.read_csv(master_path)
     taiwan_master.to_csv(
-        taiwan_database_dir / "security-master.csv",
+        master_path,
         index=False,
     )
     save_universe_snapshot(
