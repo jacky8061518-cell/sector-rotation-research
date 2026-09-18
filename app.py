@@ -695,31 +695,26 @@ def render_lightweight_broker_branch_page() -> None:
         "Daily": {
             "label": "當日",
             "institutional_period": "最新 1 個交易日",
-            "branch_period": "1 日累積",
+            "branch_period": "最新 1 個交易日",
+            "branch_window": 1,
         },
         "Weekly": {
             "label": "當週",
             "institutional_period": "最近 5 個交易日",
-            "branch_period": "7 日累積",
+            "branch_period": "近 5 個交易日累積",
+            "branch_window": 5,
         },
         "Monthly": {
             "label": "當月",
             "institutional_period": "最近 20 個交易日",
-            "branch_period": "30 日累積",
+            "branch_period": "近 20 個交易日累積",
+            "branch_window": 20,
         },
     }
     period_tabs = st.tabs([settings["label"] for settings in horizon_settings.values()])
 
     for period_tab, (horizon, settings) in zip(period_tabs, horizon_settings.items()):
         with period_tab:
-            period_trades = branch_trades[branch_trades["Horizon"] == horizon].copy()
-            if period_trades.empty:
-                st.info(f"{settings['label']}券商分點資料尚未建立，請等待每日更新。")
-                continue
-            branch_activity, branch_stocks = aggregate_branch_activity(
-                period_trades,
-                window=1,
-            )
             if base_securities.empty:
                 institutional_period = pd.DataFrame()
             else:
@@ -728,6 +723,28 @@ def render_lightweight_broker_branch_page() -> None:
                     base_groups,
                     horizon,
                 )
+            daily_history = branch_trades[branch_trades["Horizon"] == "Daily"].copy()
+            if not institutional_period.empty and "Selected net value" in institutional_period:
+                focus_codes = (
+                    institutional_period.nlargest(10, "Selected net value")["Ticker"]
+                    .astype(str).str.replace(r"\.(TW|TWO)$", "", regex=True)
+                )
+                daily_history = daily_history[daily_history["Ticker"].isin(focus_codes)]
+            if not daily_history.empty:
+                period_trades = daily_history
+                branch_window = settings["branch_window"]
+                source_label = "Yahoo 股市每日分點"
+            else:
+                period_trades = branch_trades[branch_trades["Horizon"] == horizon].copy()
+                branch_window = 1
+                source_label = "HiStock 舊版累積快取"
+            if period_trades.empty:
+                st.info(f"{settings['label']}券商分點資料尚未建立，請等待每日更新。")
+                continue
+            branch_activity, branch_stocks = aggregate_branch_activity(
+                period_trades,
+                window=branch_window,
+            )
             candidates = build_broker_research_candidates(
                 branch_stocks,
                 institutional_period,
@@ -739,15 +756,21 @@ def render_lightweight_broker_branch_page() -> None:
 
             branch_date = pd.to_datetime(period_trades["Date"]).max()
             metrics = st.columns(4)
-            metrics[0].metric("資料來源", "HiStock 公開分點頁")
+            metrics[0].metric("資料來源", source_label)
             metrics[1].metric("分點期間截止", f"{branch_date:%Y-%m-%d}")
             metrics[2].metric("追蹤股票", f"{branch_stocks['Ticker'].nunique():,}")
             metrics[3].metric("不同分點", f"{branch_activity['Broker ID'].nunique():,}")
             covered_stocks = int(branch_stocks["Ticker"].nunique())
             st.info(
                 f"股票先依官方三大法人{settings['institutional_period']}估算淨流入選前 10；"
-                f"再逐檔讀取公開頁{settings['branch_period']}的主要買超／賣超分點。"
+                f"再逐檔累積公開頁{settings['branch_period']}的主要買超／賣超分點。"
             )
+            observed_days = int(period_trades["Date"].nunique())
+            if source_label.startswith("Yahoo") and observed_days < branch_window:
+                st.warning(
+                    f"目前日資料僅累積 {observed_days}/{branch_window} 個交易日；"
+                    "每日機器人會持續補齊，未滿期間前週／月結果屬部分資料。"
+                )
             if covered_stocks < 10:
                 st.warning(
                     f"本期前 10 檔目前已取得 {covered_stocks} 檔分點；"

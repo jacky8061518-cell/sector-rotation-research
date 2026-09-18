@@ -6,6 +6,7 @@ from sector_rotation.broker_branch import (
     normalize_broker_branch_trades,
     parse_histock_branch_page,
     parse_histock_weekly_branch_page,
+    parse_yahoo_branch_page,
 )
 
 
@@ -92,3 +93,23 @@ def test_parser_preserves_requested_monthly_horizon():
     """
     parsed = parse_histock_branch_page(html, "2408", "Monthly")
     assert parsed["Horizon"].eq("Monthly").all()
+
+
+def test_parses_yahoo_daily_branch_table():
+    html = """
+    <time datatime="2026/09/17"><span>資料時間：</span><span>2026/09/17</span></time>
+    <div><div><span>買超券商</span><span>買進</span><span>賣出</span><span>買超張數</span></div>
+      <div><span>港商野村</span><span>1,428</span><span>82</span><span>1,346</span></div>
+    </div>
+    <div><div><span>賣超券商</span><span>買進</span><span>賣出</span><span>賣超張數</span></div>
+      <div><span>美商高盛</span><span>838</span><span>1,725</span><span>-887</span></div>
+    </div>
+    """
+    parsed = parse_yahoo_branch_page(html, "2330.TW", price=1265.0)
+    assert set(parsed["Broker"]) == {"港商野村", "美商高盛"}
+    buyer = parsed[parsed["Broker"] == "港商野村"].iloc[0]
+    assert buyer["Buy shares"] == 1_428_000
+    assert buyer["Sell shares"] == 82_000
+    assert buyer["Price"] == 1265.0
+    assert buyer["Date"] == pd.Timestamp("2026-09-17")
+    assert parsed["Horizon"].eq("Daily").all()

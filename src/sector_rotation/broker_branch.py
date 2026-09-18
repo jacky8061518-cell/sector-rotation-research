@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
+from bs4 import BeautifulSoup
 
 
 FINMIND_BRANCH_URL = (
@@ -25,6 +26,7 @@ FINMIND_BRANCH_URL = (
     "taiwan_stock_trading_daily_report"
 )
 HISTOCK_BRANCH_URL = "https://histock.tw/stock/branch.aspx?no={ticker}&day={days}"
+YAHOO_BRANCH_URL = "https://tw.stock.yahoo.com/quote/{ticker}/broker-trading"
 HORIZON_DAYS = {"Daily": 1, "Weekly": 7, "Monthly": 30}
 
 BRANCH_COLUMNS = [
@@ -98,6 +100,72 @@ def fetch_finmind_broker_branch(
     if payload.get("status") != 200:
         raise RuntimeError(payload.get("msg", "券商分點資料下載失敗。"))
     return normalize_broker_branch_trades(pd.DataFrame(payload.get("data", [])))
+
+
+def parse_yahoo_branch_page(
+    html: str,
+    ticker: str,
+    *,
+    price: float = 0.0,
+) -> pd.DataFrame:
+    """Parse Yahoo Taiwan's public daily broker buy/sell ranking.
+
+    Yahoo reports quantities in lots (張).  The page is a daily snapshot, so
+    callers should persist every trading day and aggregate those observations
+    into 5/20-session windows instead of treating the page as cumulative data.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    time_tag = soup.find("time", attrs={"datatime": True})
+    if time_tag is None:
+        return pd.DataFrame(columns=BRANCH_COLUMNS)
+    session = pd.to_datetime(time_tag.get("datatime"), errors="coerce")
+    if pd.isna(session):
+        return pd.DataFrame(columns=BRANCH_COLUMNS)
+
+    records: dict[str, dict[str, object]] = {}
+    for heading in ("買超券商", "賣超券商"):
+        heading_node = soup.find(string=lambda value: value and value.strip() == heading)
+        if heading_node is None:
+            continue
+        section = heading_node.parent.parent.parent
+        for row in section.find_all("div", recursive=False)[1:]:
+            cells = [node.get_text(" ", strip=True) for node in row.find_all("span", recursive=False)]
+            if len(cells) < 4:
+                continue
+            broker = cells[0]
+            try:
+                buy_lots = float(cells[1].replace(",", ""))
+                sell_lots = float(cells[2].replace(",", ""))
+            except ValueError:
+                continue
+            if not broker or (buy_lots == 0 and sell_lots == 0):
+                continue
+            records[broker] = {
+                "Date": session,
+                "Ticker": ticker.split(".")[0],
+                "Broker ID": broker,
+                "Broker": broker,
+                "Price": float(price or 0.0),
+                "Buy shares": buy_lots * 1000,
+                "Sell shares": sell_lots * 1000,
+                "Horizon": "Daily",
+            }
+    return normalize_broker_branch_trades(pd.DataFrame(records.values()))
+
+
+def fetch_yahoo_broker_branches(ticker: str, *, price: float = 0.0) -> pd.DataFrame:
+    """Fetch the latest public daily broker-branch ranking from Yahoo Taiwan."""
+    yahoo_ticker = ticker if "." in ticker else f"{ticker}.TW"
+    request = Request(
+        YAHOO_BRANCH_URL.format(ticker=yahoo_ticker),
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TaiwanFundFlowLab/1.0",
+            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.5",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        payload = response.read().decode("utf-8", errors="replace")
+    return parse_yahoo_branch_page(payload, yahoo_ticker, price=price)
 
 
 def _plain_text(value: str) -> str:

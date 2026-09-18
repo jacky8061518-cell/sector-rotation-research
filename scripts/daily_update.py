@@ -17,7 +17,8 @@ from factors.data_tw import (
 )
 from factors.snapshots import build_daily_factor_snapshot, update_market_cap_snapshot
 from sector_rotation.broker_branch import (
-    fetch_histock_broker_branches,
+    fetch_yahoo_broker_branches,
+    load_broker_branch_cache,
 )
 from sector_rotation.fund_flow import (
     calculate_fund_flow_signals,
@@ -161,49 +162,55 @@ def main() -> None:
             index=False,
         )
 
-    # Keep the branch workload focused: for each research horizon select the ten
-    # stocks with the strongest institutional inflow, then fetch the matching
-    # public cumulative branch table from HiStock.
+    # Keep the branch workload focused: take the union of the daily/weekly/monthly
+    # institutional-flow leaders and persist Yahoo's actual daily branch snapshot.
+    # Weekly/monthly views are then built from the last 5/20 stored sessions.
     broker_cache_path = taiwan_database_dir / "broker-branches.parquet"
     broker_cache = pd.DataFrame()
     broker_status = "no candidates"
     if not stock_flows.empty:
         stock_only = stock_flows[stock_flows["Asset type"] == "股票"].copy()
         fresh_branch_rows = []
-        completed: dict[str, int] = {}
+        focus_tickers: list[str] = []
         for horizon, flow_column in {
             "Daily": "1D net value",
             "Weekly": "5D net value",
             "Monthly": "20D net value",
         }.items():
-            focus_tickers = (
+            horizon_tickers = (
                 stock_only.nlargest(10, flow_column)["Ticker"]
-                .str.replace(r"\.(TW|TWO)$", "", regex=True)
                 .tolist()
             )
-            completed[horizon] = 0
-            for ticker in focus_tickers:
-                try:
-                    frame = fetch_histock_broker_branches(ticker, horizon)
-                except (OSError, TimeoutError, ValueError):
-                    continue
-                if not frame.empty:
-                    fresh_branch_rows.append(frame)
-                    completed[horizon] += 1
+            focus_tickers.extend(horizon_tickers)
+        focus_tickers = list(dict.fromkeys(focus_tickers))
+        completed = 0
+        latest_prices = tw_prices.ffill().iloc[-1].to_dict()
+        for ticker in focus_tickers:
+            try:
+                frame = fetch_yahoo_broker_branches(
+                    ticker,
+                    price=float(latest_prices.get(ticker, 0.0)),
+                )
+            except (OSError, TimeoutError, ValueError):
+                continue
+            if not frame.empty:
+                fresh_branch_rows.append(frame)
+                completed += 1
         if fresh_branch_rows:
+            existing = load_broker_branch_cache(broker_cache_path)
+            # Keep legacy cumulative rows for backward compatibility, while all
+            # new Yahoo observations are stored as truthful Daily snapshots.
             combined = (
-                pd.concat(fresh_branch_rows, ignore_index=True)
+                pd.concat([existing, *fresh_branch_rows], ignore_index=True)
                 .drop_duplicates(
                     ["Date", "Ticker", "Broker ID", "Horizon"], keep="last"
                 )
-                .sort_values(["Horizon", "Ticker", "Broker ID"])
+                .sort_values(["Date", "Horizon", "Ticker", "Broker ID"])
                 .reset_index(drop=True)
             )
             combined.to_parquet(broker_cache_path, index=False)
             broker_cache = combined
-            broker_status = "HiStock " + ", ".join(
-                f"{horizon}={count}" for horizon, count in completed.items()
-            )
+            broker_status = f"Yahoo daily={completed}/{len(focus_tickers)}"
         else:
             broker_status = "no new rows"
     tw_written = build_rotation_snapshots(
