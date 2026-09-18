@@ -29,3 +29,5 @@ data/snapshots/*
 data/snapshots/tw/*
 !data/snapshots/tw/latest-factor-snapshot.parquet
 !data/snapshots/tw/latest-factor-snapshot.csv
+!data/snapshots/tw/latest-stock-fund-flow.csv
+!data/snapshots/tw/latest-industry-fund-flow.csv
