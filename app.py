@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
 import importlib
 import os
-from pathlib import Path
 import re
+from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,14 +12,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+import sector_rotation.broker_branch as broker_branch_module
+import sector_rotation.fund_flow as fund_flow_module
 from factors.data_tw import load_optional_panel, normalize_institutional_flows
 from factors.ui import render_factor_lab
-from sector_rotation.broker_branch import (
-    aggregate_branch_activity,
-    build_broker_research_candidates,
-    load_broker_branch_cache,
-    normalize_broker_branch_trades,
-)
 from sector_rotation.config import BENCHMARK, DEFENSIVE_ASSET
 from sector_rotation.data import (
     download_adjusted_prices,
@@ -27,8 +23,6 @@ from sector_rotation.data import (
     load_cached_or_download_prices,
     repair_taiwan_price_discontinuities,
 )
-import sector_rotation.fund_flow as fund_flow_module
-import sector_rotation.broker_branch as broker_branch_module
 from sector_rotation.flow_strategy import FlowStrategyConfig, run_weekly_flow_strategy
 from sector_rotation.holdings import analyze_holding_leadership, fetch_top_holdings
 from sector_rotation.metrics import benchmark_returns, drawdown, equity_curve, performance_summary
@@ -102,7 +96,7 @@ FREQUENCY_SETTINGS = {
     },
 }
 
-DATA_PIPELINE_VERSION = "0.9.1-broker-branch-horizons"
+DATA_PIPELINE_VERSION = "1.1.0-flow-exit-comparison"
 PROJECT_ROOT = Path(__file__).resolve().parent
 TAIWAN_PRICE_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "adjusted-prices.parquet"
 TAIWAN_FLOW_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "institutional-flows.parquet"
@@ -112,6 +106,11 @@ TAIWAN_FINANCIAL_DATABASE = PROJECT_ROOT / "data" / "databases" / "tw" / "financ
 TAIWAN_BROKER_BRANCH_DATABASE = (
     PROJECT_ROOT / "data" / "databases" / "tw" / "broker-branches.parquet"
 )
+LATEST_STOCK_FLOW_SNAPSHOT = PROJECT_ROOT / "data" / "snapshots" / "tw" / "latest-stock-fund-flow.csv"
+LATEST_INDUSTRY_FLOW_SNAPSHOT = PROJECT_ROOT / "data" / "snapshots" / "tw" / "latest-industry-fund-flow.csv"
+FLOW_EXIT_COMPARISON = PROJECT_ROOT / "data" / "snapshots" / "tw" / "flow-exit-comparison-3y.csv"
+FLOW_EXIT_EQUITY = PROJECT_ROOT / "data" / "snapshots" / "tw" / "flow-exit-equity-3y.csv"
+FLOW_EXIT_YEARLY = PROJECT_ROOT / "data" / "snapshots" / "tw" / "flow-exit-yearly-3y.csv"
 TAIWAN_SECURITY_MASTER_DATABASE = (
     PROJECT_ROOT / "data" / "databases" / "tw" / "security-master.csv"
 )
@@ -212,6 +211,17 @@ def load_demo_data(tickers: tuple[str, ...]) -> pd.DataFrame:
     return generate_demo_prices(tickers=list(tickers))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_live_data(
+    tickers: tuple[str, ...],
+    start: date,
+    end: date,
+    pipeline_version: str,
+) -> pd.DataFrame:
+    del pipeline_version
+    return download_adjusted_prices(list(tickers), start, end)
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_top_holdings(etfs: tuple[str, ...]) -> pd.DataFrame:
     return fetch_top_holdings(list(etfs))
@@ -278,6 +288,17 @@ def load_taiwan_institutional_flows(pipeline_version: str) -> pd.DataFrame:
     flows = pd.read_parquet(TAIWAN_FLOW_DATABASE)
     flows["Date"] = pd.to_datetime(flows["Date"])
     return flows
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_flow_exit_comparison(pipeline_version: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    del pipeline_version
+    if not all(path.exists() for path in (FLOW_EXIT_COMPARISON, FLOW_EXIT_EQUITY, FLOW_EXIT_YEARLY)):
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    metrics = pd.read_csv(FLOW_EXIT_COMPARISON, index_col=0)
+    equity = pd.read_csv(FLOW_EXIT_EQUITY, index_col=0, parse_dates=True)
+    yearly = pd.read_csv(FLOW_EXIT_YEARLY, index_col=0)
+    return metrics, equity, yearly
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -713,7 +734,7 @@ def render_lightweight_broker_branch_page() -> None:
     }
     period_tabs = st.tabs([settings["label"] for settings in horizon_settings.values()])
 
-    for period_tab, (horizon, settings) in zip(period_tabs, horizon_settings.items()):
+    for period_tab, (horizon, settings) in zip(period_tabs, horizon_settings.items(), strict=True):
         with period_tab:
             if base_securities.empty:
                 institutional_period = pd.DataFrame()
@@ -735,6 +756,8 @@ def render_lightweight_broker_branch_page() -> None:
                 branch_window = settings["branch_window"]
                 source_label = "Yahoo 股市每日分點"
             else:
+                # Preserve old HiStock cumulative caches while the daily Yahoo
+                # history is being built for a newly deployed database.
                 period_trades = branch_trades[branch_trades["Horizon"] == horizon].copy()
                 branch_window = 1
                 source_label = "HiStock 舊版累積快取"
@@ -874,6 +897,77 @@ def render_lightweight_broker_branch_page() -> None:
     )
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def load_latest_flow_snapshots(pipeline_version: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load the compact daily output used by the cloud-safe landing page."""
+    del pipeline_version
+    stocks = pd.read_csv(LATEST_STOCK_FLOW_SNAPSHOT) if LATEST_STOCK_FLOW_SNAPSHOT.exists() else pd.DataFrame()
+    industries = (
+        pd.read_csv(LATEST_INDUSTRY_FLOW_SNAPSHOT)
+        if LATEST_INDUSTRY_FLOW_SNAPSHOT.exists()
+        else pd.DataFrame()
+    )
+    return stocks, industries
+
+
+def render_lightweight_flow_home() -> None:
+    """Render current fund-flow leaders without loading the full 14-year backtest."""
+    st.subheader("資金流、產業輪動與策略回測")
+    st.caption("首頁先載入最新資金流快照；需要歷史績效時，再啟動完整回測。")
+    stocks, industries = load_latest_flow_snapshots(DATA_PIPELINE_VERSION)
+    if stocks.empty or industries.empty:
+        st.error("最新資金流快照尚未建立，請等待每日更新完成。")
+        return
+    signal_date = pd.to_datetime(stocks["Signal date"], errors="coerce").max()
+    metrics = st.columns(4)
+    metrics[0].metric("資料截止", f"{signal_date:%Y-%m-%d}" if pd.notna(signal_date) else "—")
+    metrics[1].metric("股票數", f"{stocks['Ticker'].nunique():,}")
+    metrics[2].metric("產業數", f"{industries['Industry'].nunique():,}")
+    metrics[3].metric("更新方式", "每日自動")
+
+    if st.button("載入完整輪動圖、參數與歷史回測", type="primary", use_container_width=True):
+        st.session_state["load_full_rotation_backtest"] = True
+        st.rerun()
+    st.info("完整回測會載入全市場多年價格，約需數十秒；手機或雲端記憶體不足時可先使用本頁。")
+
+    horizon_tabs = st.tabs(["今日", "本週", "本月"])
+    for tab, label, value_column, breadth_column in zip(
+        horizon_tabs,
+        ["今日", "本週", "本月"],
+        ["1D net value", "5D net value", "20D net value"],
+        ["1D positive breadth", "5D positive breadth", "20D positive breadth"],
+        strict=True,
+    ):
+        with tab:
+            industry_view = industries.nlargest(10, value_column).copy()
+            industry_view["法人淨流入（億）"] = industry_view[value_column] / 1e8
+            industry_view["流入廣度"] = industry_view[breadth_column]
+            st.markdown(f"### {label}資金流入產業前 10 名")
+            st.dataframe(
+                industry_view[["Industry", "法人淨流入（億）", "流入廣度", "Leading stocks", "Dominant investor", "Stage"]]
+                .rename(columns={"Industry": "產業", "Leading stocks": "主要股票", "Dominant investor": "主導法人", "Stage": "階段"}),
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "法人淨流入（億）": st.column_config.NumberColumn(format="%+.1f"),
+                    "流入廣度": st.column_config.ProgressColumn(format="%.0%%", min_value=0, max_value=1),
+                },
+            )
+            stock_view = stocks[stocks["Asset type"].eq("股票")].nlargest(10, value_column).copy()
+            stock_view["法人淨流入（億）"] = stock_view[value_column] / 1e8
+            st.markdown(f"### {label}資金流入股票前 10 名")
+            st.dataframe(
+                stock_view[["Ticker", "Name", "Detailed industry", "Investment theme", "法人淨流入（億）", "Flow score", "Stage"]]
+                .rename(columns={"Ticker": "股票", "Name": "名稱", "Detailed industry": "細分產業", "Investment theme": "主題", "Flow score": "資金分數", "Stage": "階段"}),
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "法人淨流入（億）": st.column_config.NumberColumn(format="%+.1f"),
+                    "資金分數": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+
+
 st.title("台股資金流與券商分點研究系統")
 st.caption(
     "同一個網站整合：三大法人資金流｜券商分點｜產業輪動｜策略回測"
@@ -921,6 +1015,15 @@ if research_section == "因子研究實驗室":
         financials=load_optional_panel(TAIWAN_FINANCIAL_DATABASE),
     )
     st.stop()
+
+
+if not st.session_state.get("load_full_rotation_backtest", False):
+    render_lightweight_flow_home()
+    st.stop()
+
+if st.button("返回輕量資金流首頁"):
+    st.session_state["load_full_rotation_backtest"] = False
+    st.rerun()
 
 
 st.subheader("資金流、產業輪動與策略回測")
@@ -1393,7 +1496,10 @@ else:
         horizon_settings = FLOW_HORIZON_SETTINGS[horizon]
         investor_columns = horizon_settings["investors"]
 
-        def stock_flow_view(frame: pd.DataFrame) -> pd.DataFrame:
+        def stock_flow_view(
+            frame: pd.DataFrame,
+            investor_columns: dict[str, str] = investor_columns,
+        ) -> pd.DataFrame:
             view = frame.copy()
             investor_values = view[list(investor_columns.values())].abs()
             dominant_columns = investor_values.idxmax(axis=1)
@@ -1633,6 +1739,70 @@ with tab_flow_strategy:
         "每週五或該週最後交易日收盤後，計算最近 5 個交易日法人淨流入；"
         "下一個交易日（通常是週一）賣出舊持股並等權買進新前五名，固定持有一週。"
     )
+    comparison_metrics, comparison_equity, comparison_yearly = load_flow_exit_comparison(DATA_PIPELINE_VERSION)
+    with st.expander("三年比較｜哪種換股、停損與停利方式較適合？", expanded=True):
+        if comparison_metrics.empty:
+            st.info("三年比較檔尚未建立；完成官方法人歷史回補後會在這裡顯示。")
+        else:
+            comparison_start = comparison_equity.index.min()
+            comparison_end = comparison_equity.index.max()
+            st.caption(
+                f"比較期間 {comparison_start:%Y-%m-%d}～{comparison_end:%Y-%m-%d}｜"
+                "共同條件：資金分數選 5 檔、週訊號公布後下一交易日收盤成交、台股完整成本。"
+            )
+            strategy_rows = comparison_metrics.drop(index="0050 買進持有", errors="ignore")
+            best_strategy = strategy_rows["total_return"].idxmax()
+            st.success(f"本段資料的相對最佳版本：{best_strategy}。請同時看回撤與分年度結果，不只看總報酬。")
+            metric_view = comparison_metrics.reset_index().rename(
+                columns={
+                    "strategy": "策略",
+                    "annual_return": "年化報酬",
+                    "annual_volatility": "年化波動",
+                    "sharpe": "Sharpe",
+                    "max_drawdown": "最大回撤",
+                    "monthly_win_rate": "月勝率",
+                    "total_return": "三年總報酬",
+                    "gross_total_return": "未扣成本總報酬",
+                    "total_cost": "成本合計",
+                    "annual_turnover": "年化換手",
+                    "trade_count": "買進次數",
+                    "average_names": "平均持股數",
+                }
+            )
+            st.dataframe(
+                metric_view.style.format(
+                    {
+                        "年化報酬": "{:.1%}",
+                        "年化波動": "{:.1%}",
+                        "Sharpe": "{:.2f}",
+                        "最大回撤": "{:.1%}",
+                        "月勝率": "{:.1%}",
+                        "三年總報酬": "{:.1%}",
+                        "未扣成本總報酬": "{:.1%}",
+                        "成本合計": "{:.1%}",
+                        "年化換手": "{:.1f}x",
+                        "買進次數": "{:.0f}",
+                        "平均持股數": "{:.1f}",
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            comparison_chart = px.line(
+                comparison_equity.reset_index().melt(id_vars="date", var_name="策略", value_name="淨值"),
+                x="date",
+                y="淨值",
+                color="策略",
+                title="扣除成本後淨值比較",
+            )
+            comparison_chart.update_layout(height=430, hovermode="x unified")
+            st.plotly_chart(comparison_chart, width="stretch")
+            st.markdown("##### 分年度報酬")
+            st.dataframe(comparison_yearly.style.format("{:.1%}"), width="stretch")
+            st.warning(
+                "研究限制：目前使用現存股票池、最新產業分類與目前已發行股數代理歷史流通股數；"
+                "結果可能含存活者、分類與市值時點偏誤，正式投入前應先紙上交易。"
+            )
     if market != "台股" or data_mode != "Live Yahoo Finance":
         st.info("此策略需要台股交易所三大法人資料，請選擇台股與 Live Yahoo Finance。")
     elif institutional_flows.empty:
