@@ -881,10 +881,10 @@ st.caption(
 research_section = st.segmented_control(
     "研究模組",
     ["資金流與輪動回測", "券商分點日週月", "因子研究實驗室"],
-    default="券商分點日週月",
+    default="資金流與輪動回測",
 )
 if research_section is None:
-    research_section = "券商分點日週月"
+    research_section = "資金流與輪動回測"
 
 if research_section == "券商分點日週月":
     render_lightweight_broker_branch_page()
