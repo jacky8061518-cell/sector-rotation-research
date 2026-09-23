@@ -3,7 +3,7 @@ import os
 from streamlit.testing.v1 import AppTest
 
 
-def test_app_renders_lightweight_broker_page():
+def test_app_opens_on_lightweight_flow_page():
     os.environ["SECTOR_ROTATION_TEST_MODE"] = "1"
     app = AppTest.from_file("app.py", default_timeout=30)
     app.run()
@@ -15,7 +15,8 @@ def test_app_renders_lightweight_broker_page():
         "券商分點日週月",
         "因子研究實驗室",
     ]
-    assert any("當日法人流入前 10 檔" in item.value for item in app.markdown)
+    assert app.segmented_control[0].value == "資金流與輪動回測"
+    assert any("今日資金流入股票前 10 名" in item.value for item in app.markdown)
     assert len(app.metric) >= 4
     del os.environ["SECTOR_ROTATION_TEST_MODE"]
 

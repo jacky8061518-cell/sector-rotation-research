@@ -492,7 +492,7 @@ def apply_flow_horizon(
             f"{row['Selected net value'] / 1e8:+.1f} 億；"
             f"{row['Dominant investor']}為主導；"
             f"產業內流入家數占 {row['Positive flow breadth']:.0%}；"
-            f"同期價格報酬 {row['Selected return']:+.1%}。"
+            f"同期間股價漲跌幅 {row['Selected return']:+.1%}。"
             f"主要帶動：{row['Leading stocks']}。"
         ),
         axis=1,
@@ -822,7 +822,7 @@ def render_lightweight_broker_branch_page() -> None:
                         "Research score": "研究分數", "Top buyer": "最大買超分點",
                         "Top seller": "最大賣超分點", "Buyer seller strength": "買賣強度比",
                         "Top 3 buying concentration": "前三大買盤集中度",
-                        "Selected return": "同期報酬", "Reason": "原因",
+                        "Selected return": "同期間股價漲跌幅", "Reason": "原因",
                     }
                 ),
                 column_config={
@@ -833,7 +833,7 @@ def render_lightweight_broker_branch_page() -> None:
                     "前三大買盤集中度": st.column_config.ProgressColumn(
                         format="%.0%%", min_value=0, max_value=1
                     ),
-                    "同期報酬": st.column_config.NumberColumn(format="%+.1%%"),
+                    "同期間股價漲跌幅": st.column_config.NumberColumn(format="%+.1%%"),
                 },
                 hide_index=True,
                 width="stretch",
@@ -931,11 +931,12 @@ def render_lightweight_flow_home() -> None:
     st.info("完整回測會載入全市場多年價格，約需數十秒；手機或雲端記憶體不足時可先使用本頁。")
 
     horizon_tabs = st.tabs(["今日", "本週", "本月"])
-    for tab, label, value_column, breadth_column in zip(
+    for tab, label, value_column, breadth_column, return_column in zip(
         horizon_tabs,
         ["今日", "本週", "本月"],
         ["1D net value", "5D net value", "20D net value"],
         ["1D positive breadth", "5D positive breadth", "20D positive breadth"],
+        ["1D return", "5D return", "20D return"],
         strict=True,
     ):
         with tab:
@@ -955,14 +956,38 @@ def render_lightweight_flow_home() -> None:
             )
             stock_view = stocks[stocks["Asset type"].eq("股票")].nlargest(10, value_column).copy()
             stock_view["法人淨流入（億）"] = stock_view[value_column] / 1e8
+            stock_view["股價漲跌幅"] = stock_view[return_column]
+            stock_view["公司市值（億）"] = stock_view["Market cap proxy"] / 1e8
             st.markdown(f"### {label}資金流入股票前 10 名")
             st.dataframe(
-                stock_view[["Ticker", "Name", "Detailed industry", "Investment theme", "法人淨流入（億）", "Flow score", "Stage"]]
-                .rename(columns={"Ticker": "股票", "Name": "名稱", "Detailed industry": "細分產業", "Investment theme": "主題", "Flow score": "資金分數", "Stage": "階段"}),
+                stock_view[
+                    [
+                        "Ticker",
+                        "Name",
+                        "Detailed industry",
+                        "Investment theme",
+                        "法人淨流入（億）",
+                        "股價漲跌幅",
+                        "公司市值（億）",
+                        "Flow score",
+                        "Stage",
+                    ]
+                ].rename(
+                    columns={
+                        "Ticker": "股票",
+                        "Name": "名稱",
+                        "Detailed industry": "細分產業",
+                        "Investment theme": "主題",
+                        "Flow score": "資金分數",
+                        "Stage": "階段",
+                    }
+                ),
                 hide_index=True,
                 width="stretch",
                 column_config={
                     "法人淨流入（億）": st.column_config.NumberColumn(format="%+.1f"),
+                    "股價漲跌幅": st.column_config.NumberColumn(format="%+.1%%"),
+                    "公司市值（億）": st.column_config.NumberColumn(format="%.0f"),
                     "資金分數": st.column_config.NumberColumn(format="%.1f"),
                 },
             )
@@ -1521,7 +1546,7 @@ else:
                     "投信（億）": view[investor_columns["投信"]] / 1e8,
                     "自營商（億）": view[investor_columns["自營商"]] / 1e8,
                     "主導法人": view["主導法人"],
-                    "同期報酬（%）": view["Selected return"] * 100,
+                    "同期間股價漲跌幅（%）": view["Selected return"] * 100,
                     "資金分數": view["Flow score"],
                     "階段": view["Stage"],
                 }
@@ -1608,7 +1633,7 @@ else:
                             "外資（億）": st.column_config.NumberColumn(format="%+.2f"),
                             "投信（億）": st.column_config.NumberColumn(format="%+.2f"),
                             "自營商（億）": st.column_config.NumberColumn(format="%+.2f"),
-                            "同期報酬（%）": st.column_config.NumberColumn(format="%.2f%%"),
+                            "同期間股價漲跌幅（%）": st.column_config.NumberColumn(format="%.2f%%"),
                             "資金分數": st.column_config.NumberColumn(format="%.1f"),
                         },
                         hide_index=True,
@@ -1638,7 +1663,7 @@ else:
                             "外資（億）": st.column_config.NumberColumn(format="%+.2f"),
                             "投信（億）": st.column_config.NumberColumn(format="%+.2f"),
                             "自營商（億）": st.column_config.NumberColumn(format="%+.2f"),
-                            "同期報酬（%）": st.column_config.NumberColumn(format="%.2f%%"),
+                            "同期間股價漲跌幅（%）": st.column_config.NumberColumn(format="%.2f%%"),
                             "資金分數": st.column_config.NumberColumn(format="%.1f"),
                         },
                         hide_index=True,
@@ -2367,7 +2392,7 @@ with tab_broker_branch:
                     "Top buyer": "最大買超分點",
                     "Buyer seller strength": "買賣強度比",
                     "Top 3 buying concentration": "前三大買盤集中度",
-                    "Selected return": "同期報酬",
+                    "Selected return": "同期間股價漲跌幅",
                     "Reason": "原因",
                 }
             ),
@@ -2377,7 +2402,7 @@ with tab_broker_branch:
                 "法人流向（億）": st.column_config.NumberColumn(format="%+.2f"),
                 "買賣強度比": st.column_config.NumberColumn(format="%.2fx"),
                 "前三大買盤集中度": st.column_config.ProgressColumn(format="%.0%%", min_value=0, max_value=1),
-                "同期報酬": st.column_config.NumberColumn(format="%+.1%%"),
+                "同期間股價漲跌幅": st.column_config.NumberColumn(format="%+.1%%"),
             },
             hide_index=True,
             width="stretch",
