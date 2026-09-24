@@ -962,9 +962,12 @@ def render_new_institutional_buyer_screener(stocks: pd.DataFrame) -> None:
     )
     rule_label = control_columns[3].selectbox(
         "判定方式",
-        ["嚴格首次買進", "區間由賣轉買"],
-        help="嚴格：過去每天都沒有淨買超；區間：過去累計為零或賣超。",
-        key="new_buyer_rule",
+        ["區間淨賣後轉買（建議）", "每日皆未買後首買（極嚴格）"],
+        help=(
+            "建議：過去區間累計為零或賣超，最新交易日轉為買超；"
+            "極嚴格：過去每一個交易日都不得出現買超，通常只會找到極少數股票。"
+        ),
+        key="new_buyer_rule_v2",
     )
     if not investors:
         st.warning("請至少選擇一種法人。")
@@ -982,10 +985,13 @@ def render_new_institutional_buyer_screener(stocks: pd.DataFrame) -> None:
         lookback_sessions=lookback,
         investors=tuple(investors),
         minimum_latest_net_shares=float(minimum_lots) * 1000,
-        strict_no_prior_buying=rule_label == "嚴格首次買進",
+        strict_no_prior_buying=rule_label == "每日皆未買後首買（極嚴格）",
     )
     if matches.empty:
-        st.info("目前沒有股票符合條件；可降低最低買超張數、縮短回看日數或改用區間由賣轉買。")
+        st.info(
+            "目前沒有股票符合條件。若使用極嚴格模式，代表回看期間只要曾有一天買超就會被排除；"
+            "建議改用「區間淨賣後轉買」、降低最低張數或縮短回看日數。"
+        )
         return
 
     metadata_columns = [
