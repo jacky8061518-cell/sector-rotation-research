@@ -13,6 +13,103 @@ import numpy as np
 import pandas as pd
 
 
+INSTITUTIONAL_INVESTOR_COLUMNS = {
+    "外資": "Foreign net shares",
+    "投信": "Trust net shares",
+    "自營商": "Dealer net shares",
+}
+
+
+def detect_new_institutional_buyers(
+    flows: pd.DataFrame,
+    *,
+    lookback_sessions: int = 20,
+    investors: tuple[str, ...] = ("外資", "投信", "自營商"),
+    minimum_latest_net_shares: float = 0.0,
+    strict_no_prior_buying: bool = True,
+) -> pd.DataFrame:
+    """Find stocks where at least one selected investor has just turned net buyer.
+
+    In strict mode every observation in the preceding window must be non-positive.
+    In relaxed mode only the cumulative flow over that window must be non-positive.
+    Stocks without a complete lookback window are excluded so newly listed names are
+    not incorrectly described as having no prior buying.
+    """
+    output_columns = [
+        "Date", "Ticker", "Name", "Market", "Triggered investors",
+        "Triggered latest net shares", "Triggered prior net shares", "History sessions",
+        *[f"{name} triggered" for name in investors],
+        *[f"{name} latest net shares" for name in investors],
+        *[f"{name} prior net shares" for name in investors],
+    ]
+    if flows.empty or lookback_sessions < 1 or not investors:
+        return pd.DataFrame(columns=output_columns)
+
+    unknown = set(investors) - set(INSTITUTIONAL_INVESTOR_COLUMNS)
+    if unknown:
+        raise ValueError(f"Unknown institutional investors: {sorted(unknown)}")
+
+    frame = flows.copy()
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce").dt.normalize()
+    frame = frame.dropna(subset=["Date", "Ticker"])
+    if frame.empty:
+        return pd.DataFrame(columns=output_columns)
+    available_dates = sorted(frame["Date"].unique())
+    if len(available_dates) <= lookback_sessions:
+        return pd.DataFrame(columns=output_columns)
+
+    latest_date = pd.Timestamp(available_dates[-1])
+    prior_dates = set(available_dates[-lookback_sessions - 1 : -1])
+    latest = frame[frame["Date"].eq(latest_date)].copy()
+    prior = frame[frame["Date"].isin(prior_dates)].copy()
+    if latest.empty or prior.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    rows: list[dict[str, object]] = []
+    for ticker, latest_rows in latest.groupby("Ticker", sort=False):
+        ticker_prior = prior[prior["Ticker"].eq(ticker)]
+        if ticker_prior["Date"].nunique() < lookback_sessions:
+            continue
+        current = latest_rows.iloc[-1]
+        row: dict[str, object] = {
+            "Date": latest_date,
+            "Ticker": ticker,
+            "Name": current.get("Name", ticker),
+            "Market": current.get("Market", ""),
+            "History sessions": lookback_sessions,
+        }
+        triggered: list[str] = []
+        latest_total = 0.0
+        prior_total = 0.0
+        for investor in investors:
+            source_column = INSTITUTIONAL_INVESTOR_COLUMNS[investor]
+            latest_value = float(pd.to_numeric(current.get(source_column, 0.0), errors="coerce") or 0.0)
+            history = pd.to_numeric(ticker_prior[source_column], errors="coerce").fillna(0.0)
+            prior_value = float(history.sum())
+            no_prior_buying = bool((history <= 0).all()) if strict_no_prior_buying else prior_value <= 0
+            is_triggered = latest_value > minimum_latest_net_shares and no_prior_buying
+            row[f"{investor} triggered"] = is_triggered
+            row[f"{investor} latest net shares"] = latest_value
+            row[f"{investor} prior net shares"] = prior_value
+            if is_triggered:
+                triggered.append(investor)
+                latest_total += latest_value
+                prior_total += prior_value
+        if triggered:
+            row["Triggered investors"] = "、".join(triggered)
+            row["Triggered latest net shares"] = latest_total
+            row["Triggered prior net shares"] = prior_total
+            rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=output_columns)
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Triggered latest net shares", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
 TWSE_INSTITUTIONAL_URL = "https://www.twse.com.tw/rwd/zh/fund/T86"
 TPEX_INSTITUTIONAL_URL = (
     "https://www.tpex.org.tw/web/stock/3insti/daily_trade/"

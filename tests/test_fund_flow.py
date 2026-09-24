@@ -4,7 +4,65 @@ import pandas as pd
 from sector_rotation.fund_flow import (
     calculate_daily_group_flows,
     calculate_fund_flow_signals,
+    detect_new_institutional_buyers,
 )
+
+
+def test_detects_first_institutional_buy_after_quiet_window():
+    dates = pd.bdate_range("2026-01-01", periods=6)
+    rows = []
+    for session in dates:
+        rows.extend(
+            [
+                {
+                    "Date": session, "Ticker": "1111.TW", "Name": "首次買",
+                    "Market": "上市", "Foreign net shares": 0,
+                    "Trust net shares": 0, "Dealer net shares": 0,
+                },
+                {
+                    "Date": session, "Ticker": "2222.TWO", "Name": "之前買過",
+                    "Market": "上櫃", "Foreign net shares": 0,
+                    "Trust net shares": 0, "Dealer net shares": 0,
+                },
+            ]
+        )
+    flows = pd.DataFrame(rows)
+    flows.loc[(flows["Ticker"] == "1111.TW") & (flows["Date"] == dates[-1]), "Trust net shares"] = 5000
+    flows.loc[(flows["Ticker"] == "2222.TWO") & (flows["Date"] == dates[-2]), "Foreign net shares"] = 10
+    flows.loc[(flows["Ticker"] == "2222.TWO") & (flows["Date"] == dates[-1]), "Foreign net shares"] = 5000
+
+    result = detect_new_institutional_buyers(
+        flows,
+        lookback_sessions=5,
+        minimum_latest_net_shares=1000,
+    )
+
+    assert result["Ticker"].tolist() == ["1111.TW"]
+    assert result.iloc[0]["Triggered investors"] == "投信"
+    assert result.iloc[0]["Triggered latest net shares"] == 5000
+
+
+def test_relaxed_first_buy_uses_nonpositive_prior_cumulative_flow():
+    dates = pd.bdate_range("2026-01-01", periods=4)
+    flows = pd.DataFrame(
+        {
+            "Date": dates,
+            "Ticker": "1111.TW",
+            "Name": "由賣轉買",
+            "Market": "上市",
+            "Foreign net shares": [-100, 20, -50, 200],
+            "Trust net shares": 0,
+            "Dealer net shares": 0,
+        }
+    )
+    strict = detect_new_institutional_buyers(flows, lookback_sessions=3)
+    relaxed = detect_new_institutional_buyers(
+        flows,
+        lookback_sessions=3,
+        strict_no_prior_buying=False,
+    )
+    assert strict.empty
+    assert relaxed["Ticker"].tolist() == ["1111.TW"]
 
 
 def test_calculates_security_and_group_flow_leadership():

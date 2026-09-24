@@ -64,6 +64,7 @@ from sector_rotation.universe import (
 fund_flow_module = importlib.reload(fund_flow_module)
 calculate_daily_group_flows = fund_flow_module.calculate_daily_group_flows
 calculate_fund_flow_signals = fund_flow_module.calculate_fund_flow_signals
+detect_new_institutional_buyers = fund_flow_module.detect_new_institutional_buyers
 
 # Streamlit Cloud can hot-reload app.py while retaining the previously imported
 # broker helper module. Reload it so a newly deployed Horizon column is handled
@@ -287,6 +288,28 @@ def load_taiwan_institutional_flows(pipeline_version: str) -> pd.DataFrame:
         return pd.DataFrame()
     flows = pd.read_parquet(TAIWAN_FLOW_DATABASE)
     flows["Date"] = pd.to_datetime(flows["Date"])
+    return flows
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_recent_taiwan_institutional_flows(
+    calendar_days: int,
+    pipeline_version: str,
+) -> pd.DataFrame:
+    """Load only recent institutional rows for the lightweight first-buy screener."""
+    del pipeline_version
+    if not TAIWAN_FLOW_DATABASE.exists():
+        return pd.DataFrame()
+    cutoff = pd.Timestamp(date.today() - timedelta(days=calendar_days))
+    try:
+        flows = pd.read_parquet(
+            TAIWAN_FLOW_DATABASE,
+            filters=[("Date", ">=", cutoff)],
+        )
+    except (TypeError, ValueError, OSError):
+        flows = pd.read_parquet(TAIWAN_FLOW_DATABASE)
+        flows = flows[pd.to_datetime(flows["Date"], errors="coerce") >= cutoff]
+    flows["Date"] = pd.to_datetime(flows["Date"], errors="coerce")
     return flows
 
 
@@ -910,6 +933,154 @@ def load_latest_flow_snapshots(pipeline_version: str) -> tuple[pd.DataFrame, pd.
     return stocks, industries
 
 
+def render_new_institutional_buyer_screener(stocks: pd.DataFrame) -> None:
+    """Show stocks where any institution has started buying after a quiet window."""
+    st.markdown("## 法人首次轉買篩選器")
+    st.caption(
+        "找出外資、投信或自營商在回看期間沒有淨買超，但最新交易日開始淨買超的上市櫃股票。"
+    )
+    control_columns = st.columns([1, 1.5, 1, 1.3])
+    lookback = control_columns[0].selectbox(
+        "回看交易日",
+        [5, 10, 20, 40, 60],
+        index=2,
+        key="new_buyer_lookback",
+    )
+    investors = control_columns[1].multiselect(
+        "監測法人",
+        ["外資", "投信", "自營商"],
+        default=["外資", "投信", "自營商"],
+        key="new_buyer_investors",
+    )
+    minimum_lots = control_columns[2].number_input(
+        "今日最低買超（張）",
+        min_value=0,
+        value=0,
+        step=10,
+        help="設為 0 代表只要任一法人最新交易日轉為淨買超就抓出來。",
+        key="new_buyer_minimum_lots",
+    )
+    rule_label = control_columns[3].selectbox(
+        "判定方式",
+        ["嚴格首次買進", "區間由賣轉買"],
+        help="嚴格：過去每天都沒有淨買超；區間：過去累計為零或賣超。",
+        key="new_buyer_rule",
+    )
+    if not investors:
+        st.warning("請至少選擇一種法人。")
+        return
+
+    recent_flows = load_recent_taiwan_institutional_flows(
+        max(120, lookback * 3),
+        DATA_PIPELINE_VERSION,
+    )
+    if recent_flows.empty:
+        st.warning("近期三大法人資料尚未載入。")
+        return
+    matches = detect_new_institutional_buyers(
+        recent_flows,
+        lookback_sessions=lookback,
+        investors=tuple(investors),
+        minimum_latest_net_shares=float(minimum_lots) * 1000,
+        strict_no_prior_buying=rule_label == "嚴格首次買進",
+    )
+    if matches.empty:
+        st.info("目前沒有股票符合條件；可降低最低買超張數、縮短回看日數或改用區間由賣轉買。")
+        return
+
+    metadata_columns = [
+        "Ticker", "Detailed industry", "Investment theme", "1D return",
+        "Market cap proxy", "Foreign 1D value", "Trust 1D value", "Dealer 1D value",
+    ]
+    available_metadata = [column for column in metadata_columns if column in stocks.columns]
+    matches = matches.merge(
+        stocks[available_metadata].drop_duplicates("Ticker"),
+        on="Ticker",
+        how="left",
+    )
+    value_columns = {
+        "外資": "Foreign 1D value",
+        "投信": "Trust 1D value",
+        "自營商": "Dealer 1D value",
+    }
+
+    def matched_value(row: pd.Series) -> float:
+        return float(
+            sum(
+                pd.to_numeric(row.get(value_columns[investor], 0.0), errors="coerce")
+                for investor in investors
+                if row.get(f"{investor} triggered", False)
+            )
+        )
+
+    matches["今日觸發買超金額（億）"] = matches.apply(matched_value, axis=1) / 1e8
+    matches["今日觸發買超（張）"] = matches["Triggered latest net shares"] / 1000
+    matches[f"過去 {lookback} 日累計（張）"] = matches["Triggered prior net shares"] / 1000
+    matches["今日股價漲跌幅"] = matches.get("1D return", np.nan)
+    matches["公司市值（億）"] = matches.get("Market cap proxy", np.nan) / 1e8
+    matches = matches.sort_values("今日觸發買超金額（億）", ascending=False)
+
+    signal_date = pd.to_datetime(matches["Date"], errors="coerce").max()
+    summary_columns = st.columns(3)
+    summary_columns[0].metric("最新訊號日", f"{signal_date:%Y-%m-%d}")
+    summary_columns[1].metric("符合股票", f"{len(matches)} 檔")
+    summary_columns[2].metric("抓到任一法人", "立即列入")
+    display = matches[
+        [
+            "Ticker", "Name", "Market", "Triggered investors", "今日觸發買超（張）",
+            "今日觸發買超金額（億）", f"過去 {lookback} 日累計（張）",
+            "Detailed industry", "Investment theme", "今日股價漲跌幅", "公司市值（億）",
+        ]
+    ].rename(
+        columns={
+            "Ticker": "股票", "Name": "名稱", "Market": "市場",
+            "Triggered investors": "觸發法人", "Detailed industry": "細分產業",
+            "Investment theme": "投資主題",
+        }
+    )
+    st.dataframe(
+        display,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "今日觸發買超（張）": st.column_config.NumberColumn(format="%+.0f"),
+            "今日觸發買超金額（億）": st.column_config.NumberColumn(format="%+.2f"),
+            f"過去 {lookback} 日累計（張）": st.column_config.NumberColumn(format="%+.0f"),
+            "今日股價漲跌幅": st.column_config.NumberColumn(format="%+.1%%"),
+            "公司市值（億）": st.column_config.NumberColumn(format="%.0f"),
+        },
+    )
+
+    st.markdown("### 單一股票三大法人歷史")
+    labels = {
+        f"{row.Name}（{row.Ticker}）": row.Ticker
+        for row in matches[["Ticker", "Name"]].itertuples(index=False)
+    }
+    selected_label = st.selectbox("選擇股票", list(labels), key="new_buyer_history_ticker")
+    selected_ticker = labels[selected_label]
+    history = recent_flows[recent_flows["Ticker"].eq(selected_ticker)].copy()
+    history = history.sort_values("Date").tail(max(lookback + 20, 40))
+    history_view = pd.DataFrame(
+        {
+            "日期": history["Date"],
+            "外資（張）": history["Foreign net shares"] / 1000,
+            "投信（張）": history["Trust net shares"] / 1000,
+            "自營商（張）": history["Dealer net shares"] / 1000,
+        }
+    ).set_index("日期")
+    cumulative = history_view.cumsum()
+    st.caption("下圖為所選區間三大法人累計淨買賣超；往上代表累積買超，往下代表累積賣超。")
+    st.line_chart(cumulative, height=300)
+    st.dataframe(
+        history_view.sort_index(ascending=False),
+        width="stretch",
+        column_config={
+            column: st.column_config.NumberColumn(format="%+.0f")
+            for column in history_view.columns
+        },
+    )
+
+
 def render_lightweight_flow_home() -> None:
     """Render current fund-flow leaders without loading the full 14-year backtest."""
     st.subheader("資金流、產業輪動與策略回測")
@@ -929,6 +1100,8 @@ def render_lightweight_flow_home() -> None:
         st.session_state["load_full_rotation_backtest"] = True
         st.rerun()
     st.info("完整回測會載入全市場多年價格，約需數十秒；手機或雲端記憶體不足時可先使用本頁。")
+
+    render_new_institutional_buyer_screener(stocks)
 
     horizon_tabs = st.tabs(["今日", "本週", "本月"])
     for tab, label, value_column, breadth_column, return_column in zip(
