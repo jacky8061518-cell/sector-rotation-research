@@ -1,15 +1,15 @@
 Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price database,Backtest ready
-00400A,00400A.TW,主動國泰動能高息,上市,ETF,主動式 ETF,116,True,False
-00401A,00401A.TW,主動摩根台灣鑫收,上市,ETF,主動式 ETF,116,True,False
-00402A,00402A.TW,主動安聯美國科技,上市,ETF,主動式 ETF,82,True,False
-00403A,00403A.TW,主動統一升級50,上市,ETF,主動式 ETF,107,True,False
+00400A,00400A.TW,主動國泰動能高息,上市,ETF,主動式 ETF,114,True,False
+00401A,00401A.TW,主動摩根台灣鑫收,上市,ETF,主動式 ETF,114,True,False
+00402A,00402A.TW,主動安聯美國科技,上市,ETF,主動式 ETF,86,True,False
+00403A,00403A.TW,主動統一升級50,上市,ETF,主動式 ETF,106,True,False
 00404A,00404A.TW,主動聯博動能50,上市,ETF,主動式 ETF,92,True,False
 00405A,00405A.TW,主動富邦台灣龍耀,上市,ETF,主動式 ETF,92,True,False
-00406A,00406A.TW,主動中信台灣收益,上市,ETF,主動式 ETF,82,True,False
+00406A,00406A.TW,主動中信台灣收益,上市,ETF,主動式 ETF,86,True,False
 00407A,00407A.TW,主動凱基台灣,上市,ETF,主動式 ETF,79,True,False
 00408A,00408A.TW,主動第一金優股息,上市,ETF,主動式 ETF,63,True,False
-00409A,00409A.TW,主動復華全球50,上市,ETF,主動式 ETF,32,True,False
-00410A,00410A.TW,主動永豐科技趨勢,上市,ETF,主動式 ETF,42,True,False
+00409A,00409A.TW,主動復華全球50,上市,ETF,主動式 ETF,31,True,False
+00410A,00410A.TW,主動永豐科技趨勢,上市,ETF,主動式 ETF,47,True,False
 00980A,00980A.TW,主動野村臺灣優選,上市,ETF,主動式 ETF,358,True,True
 00981A,00981A.TW,主動統一台股增長,上市,ETF,主動式 ETF,337,True,True
 00982A,00982A.TW,主動群益台灣強棒,上市,ETF,主動式 ETF,346,True,True
@@ -17,18 +17,18 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00984A,00984A.TW,主動安聯台灣高息,上市,ETF,主動式 ETF,309,True,True
 00985A,00985A.TW,主動野村台灣50,上市,ETF,主動式 ETF,304,True,True
 00986A,00986A.TW,主動台新龍頭成長,上市,ETF,主動式 ETF,274,True,True
-00987A,00987A.TW,主動台新優勢成長,上市,ETF,主動式 ETF,195,True,False
+00987A,00987A.TW,主動台新優勢成長,上市,ETF,主動式 ETF,197,True,False
 00988A,00988A.TW,主動統一全球創新,上市,ETF,主動式 ETF,235,True,False
 00989A,00989A.TW,主動摩根美國科技,上市,ETF,主動式 ETF,235,True,False
-00990A,00990A.TW,主動元大AI新經濟,上市,ETF,主動式 ETF,201,True,False
-00991A,00991A.TW,主動復華未來50,上市,ETF,主動式 ETF,195,True,False
-00992A,00992A.TW,主動群益科技創新,上市,ETF,主動式 ETF,195,True,False
-00993A,00993A.TW,主動安聯台灣,上市,ETF,主動式 ETF,155,True,False
-00994A,00994A.TW,主動第一金台股優,上市,ETF,主動式 ETF,184,True,False
-00995A,00995A.TW,主動中信台灣卓越,上市,ETF,主動式 ETF,172,True,False
-00996A,00996A.TW,主動兆豐台灣豐收,上市,ETF,主動式 ETF,139,True,False
-00997A,00997A.TW,主動群益美國增長,上市,ETF,主動式 ETF,116,True,False
-00999A,00999A.TW,主動野村臺灣高息,上市,ETF,主動式 ETF,107,True,False
+00990A,00990A.TW,主動元大AI新經濟,上市,ETF,主動式 ETF,203,True,False
+00991A,00991A.TW,主動復華未來50,上市,ETF,主動式 ETF,197,True,False
+00992A,00992A.TW,主動群益科技創新,上市,ETF,主動式 ETF,197,True,False
+00993A,00993A.TW,主動安聯台灣,上市,ETF,主動式 ETF,154,True,False
+00994A,00994A.TW,主動第一金台股優,上市,ETF,主動式 ETF,182,True,False
+00995A,00995A.TW,主動中信台灣卓越,上市,ETF,主動式 ETF,175,True,False
+00996A,00996A.TW,主動兆豐台灣豐收,上市,ETF,主動式 ETF,140,True,False
+00997A,00997A.TW,主動群益美國增長,上市,ETF,主動式 ETF,114,True,False
+00999A,00999A.TW,主動野村臺灣高息,上市,ETF,主動式 ETF,106,True,False
 00680L,00680L.TW,元大美債20正2,上市,ETF,債券 ETF,2355,True,True
 00681R,00681R.TW,元大美債20反1,上市,ETF,債券 ETF,2355,True,True
 00688L,00688L.TW,國泰20年美債正2,上市,ETF,債券 ETF,2316,True,True
@@ -41,9 +41,9 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00953B,00953B.TW,群益優選非投等債,上市,ETF,債券 ETF,525,True,True
 00982D,00982D.TW,主動富邦動態入息,上市,ETF,債券 ETF,235,True,False
 00983D,00983D.TW,主動富邦複合收益,上市,ETF,債券 ETF,235,True,False
-00984D,00984D.TW,主動聯博全球非投,上市,ETF,債券 ETF,155,True,False
+00984D,00984D.TW,主動聯博全球非投,上市,ETF,債券 ETF,154,True,False
 00985B,00985B.TW,群益ESG投等債0-5,上市,ETF,債券 ETF,267,True,True
-00991B,00991B.TW,貝萊德A級公司債,上市,ETF,債券 ETF,54,True,False
+00991B,00991B.TW,貝萊德A級公司債,上市,ETF,債券 ETF,55,True,False
 0050,0050.TW,元大台灣50,上市,ETF,台灣股票 ETF,3604,True,True
 0051,0051.TW,元大中型100,上市,ETF,台灣股票 ETF,3604,True,True
 0052,0052.TW,富邦科技,上市,ETF,台灣股票 ETF,3604,True,True
@@ -105,7 +105,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 009804,009804.TW,聯邦台灣精彩50ETF基金,上市,ETF,台灣股票 ETF,367,True,True
 009808,009808.TW,華南永昌優選50,上市,ETF,台灣股票 ETF,348,True,True
 009809,009809.TW,富邦淨零ESG50,上市,ETF,台灣股票 ETF,235,True,False
-009816,009816.TW,凱基台灣TOP50,上市,ETF,台灣股票 ETF,155,True,False
+009816,009816.TW,凱基台灣TOP50,上市,ETF,台灣股票 ETF,154,True,False
 00635U,00635U.TW,期元大S&amp;P黃金(原名：元大S&amp;P黃金),上市,ETF,商品／期貨 ETF,2845,True,True
 00642U,00642U.TW,期元大S&amp;P石油(原名：元大S&amp;P石油),上市,ETF,商品／期貨 ETF,2845,True,True
 00673R,00673R.TW,期元大S&amp;P原油反1(原名：元大S&amp;P原油反1),上市,ETF,商品／期貨 ETF,2433,True,True
@@ -219,30 +219,30 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00964,00964.TW,中信亞太高股息,上市,ETF,海外股票 ETF,467,True,True
 00965,00965.TW,元大航太防衛科技,上市,ETF,海外股票 ETF,466,True,True
 00971,00971.TW,野村美國研發龍頭,上市,ETF,海外股票 ETF,407,True,True
-00972,00972.TW,野村日本動能高息,上市,ETF,海外股票 ETF,54,True,False
+00972,00972.TW,野村日本動能高息,上市,ETF,海外股票 ETF,56,True,False
 009800,009800.TW,中信NASDAQ,上市,ETF,海外股票 ETF,407,True,True
 009801,009801.TW,中信美國創新科技,上市,ETF,海外股票 ETF,407,True,True
 009805,009805.TW,台新美國電力基建,上市,ETF,海外股票 ETF,348,True,True
 009810,009810.TW,玉山全球藍籌100,上市,ETF,海外股票 ETF,309,True,True
 009811,009811.TW,統一美國50ETF基金,上市,ETF,海外股票 ETF,298,True,True
 009812,009812.TW,野村日本東證,上市,ETF,海外股票 ETF,259,True,True
-009813,009813.TW,貝萊德標普卓越50,上市,ETF,海外股票 ETF,227,True,False
-009817,009817.TW,國泰大和日本不動產收息ETF基金,上市,ETF,海外股票 ETF,155,True,False
+009813,009813.TW,貝萊德標普卓越50,上市,ETF,海外股票 ETF,223,True,False
+009817,009817.TW,國泰大和日本不動產收息ETF基金,上市,ETF,海外股票 ETF,154,True,False
 009818,009818.TW,華南永昌NASDAQxT,上市,ETF,海外股票 ETF,141,True,False
-009819,009819.TW,中信數據及電力,上市,ETF,海外股票 ETF,116,True,False
+009819,009819.TW,中信數據及電力,上市,ETF,海外股票 ETF,114,True,False
 00981T,00981T.TW,平衡凱基雙核收息,上市,ETF,海外股票 ETF,256,True,True
-009820,009820.TW,元大納斯達克精選,上市,ETF,海外股票 ETF,116,True,False
+009820,009820.TW,元大納斯達克精選,上市,ETF,海外股票 ETF,114,True,False
 009821,009821.TW,野村稀土關鍵資源,上市,ETF,海外股票 ETF,82,True,False
 009824,009824.TW,群益美國科技巨頭ETF基金,上市,ETF,海外股票 ETF,79,True,False
-009826,009826.TW,貝萊德世界股票,上市,ETF,海外股票 ETF,54,True,False
-009827,009827.TW,玉山未來全球算力,上市,ETF,海外股票 ETF,21,True,False
-009828,009828.TW,中信台日韓PCB,上市,ETF,海外股票 ETF,32,True,False
+009826,009826.TW,貝萊德世界股票,上市,ETF,海外股票 ETF,55,True,False
+009827,009827.TW,玉山未來全球算力,上市,ETF,海外股票 ETF,25,True,False
+009828,009828.TW,中信台日韓PCB,上市,ETF,海外股票 ETF,31,True,False
 009829,009829.TW,大華韓國KOSPI 50,上市,ETF,海外股票 ETF,33,True,False
-00982T,00982T.TW,平衡兆豐台美動能,上市,ETF,海外股票 ETF,195,True,False
-00411A,00411A.TWO,主動統一前沿科技,上櫃,ETF,主動式 ETF,37,True,False
+00982T,00982T.TW,平衡兆豐台美動能,上市,ETF,海外股票 ETF,197,True,False
+00411A,00411A.TWO,主動統一前沿科技,上櫃,ETF,主動式 ETF,40,True,False
 00980D,00980D.TWO,主動聯博投等入息,上櫃,ETF,主動式 ETF,294,True,True
-00985D,00985D.TWO,主動貝萊德優投等,上櫃,ETF,主動式 ETF,132,True,False
-00998A,00998A.TWO,主動復華金融股息,上櫃,ETF,主動式 ETF,116,True,False
+00985D,00985D.TWO,主動貝萊德優投等,上櫃,ETF,主動式 ETF,126,True,False
+00998A,00998A.TWO,主動復華金融股息,上櫃,ETF,主動式 ETF,114,True,False
 00679B,00679B.TWO,元大美債20年,上櫃,ETF,債券 ETF,2367,True,True
 00687B,00687B.TWO,國泰20年美債,上櫃,ETF,債券 ETF,2312,True,True
 00687C,00687C.TWO,國泰20年美債+櫃U,上櫃,ETF,債券 ETF,358,True,True
@@ -333,11 +333,11 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00983B,00983B.TWO,大華優利美公債20,上櫃,ETF,債券 ETF,348,True,True
 00984B,00984B.TWO,大華優利美A債15,上櫃,ETF,債券 ETF,348,True,True
 00986B,00986B.TWO,FT金融債10+,上櫃,ETF,債券 ETF,220,True,False
-00986D,00986D.TWO,主動復華金融債息,上櫃,ETF,債券 ETF,116,True,False
-00987B,00987B.TWO,野村10+澳洲公債,上櫃,ETF,債券 ETF,172,True,False
-00987D,00987D.TWO,主動統一美債量化,上櫃,ETF,債券 ETF,37,True,False
-00988B,00988B.TWO,玉山嚴選非投債,上櫃,ETF,債券 ETF,139,True,False
-00989B,00989B.TWO,台新美國非投等債,上櫃,ETF,債券 ETF,132,True,False
+00986D,00986D.TWO,主動復華金融債息,上櫃,ETF,債券 ETF,114,True,False
+00987B,00987B.TWO,野村10+澳洲公債,上櫃,ETF,債券 ETF,175,True,False
+00987D,00987D.TWO,主動統一美債量化,上櫃,ETF,債券 ETF,40,True,False
+00988B,00988B.TWO,玉山嚴選非投債,上櫃,ETF,債券 ETF,140,True,False
+00989B,00989B.TWO,台新美國非投等債,上櫃,ETF,債券 ETF,126,True,False
 00990B,00990B.TWO,國泰收益非投等債,上櫃,ETF,債券 ETF,63,True,False
 00992B,00992B.TWO,街口優息非投債,上櫃,ETF,債券 ETF,5,True,False
 006201,006201.TWO,元大富櫃50,上櫃,ETF,台灣股票 ETF,3608,True,True
@@ -355,7 +355,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00887,00887.TWO,永豐中國科技50大,上櫃,ETF,海外股票 ETF,1351,True,True
 00955,00955.TWO,中信日本商社,上櫃,ETF,海外股票 ETF,525,True,True
 00980T,00980T.TWO,平衡凱基美國TOP,上櫃,ETF,海外股票 ETF,282,True,True
-009815,009815.TWO,大華美國MAG7+,上櫃,ETF,海外股票 ETF,155,True,False
+009815,009815.TWO,大華美國MAG7+,上櫃,ETF,海外股票 ETF,154,True,False
 009825,009825.TWO,聯邦美國金融創新,上櫃,ETF,海外股票 ETF,63,True,False
 2323,2323.TW,中環,上市,股票,光電業,3608,True,True
 2349,2349.TW,錸德,上市,股票,光電業,3608,True,True
@@ -640,7 +640,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6799,6799.TW,來頡,上市,股票,半導體業,1415,True,True
 6854,6854.TW,錼創科技-KY創,上市,股票,半導體業,1001,True,True
 6909,6909.TW,創控,上市,股票,半導體業,843,True,True
-6921,6921.TW,嘉雨思-創,上市,股票,半導體業,184,True,False
+6921,6921.TW,嘉雨思-創,上市,股票,半導體業,182,True,False
 6937,6937.TW,天虹,上市,股票,半導體業,843,True,True
 6962,6962.TW,奕力-KY,上市,股票,半導體業,407,True,True
 7730,7730.TW,暉盛-創,上市,股票,半導體業,590,True,True
@@ -753,8 +753,8 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 7721,7721.TW,微程式,上市,股票,數位雲端,671,True,True
 7722,7722.TW,LINEPAY,上市,股票,數位雲端,651,True,True
 7765,7765.TW,中華資安,上市,股票,數位雲端,518,True,True
-7823,7823.TW,奧義賽博-KY創,上市,股票,數位雲端,155,True,False
-7835,7835.TW,永悅健康-創,上市,股票,數位雲端,42,True,False
+7823,7823.TW,奧義賽博-KY創,上市,股票,數位雲端,154,True,False
+7835,7835.TW,永悅健康-創,上市,股票,數位雲端,47,True,False
 8454,8454.TW,富邦媒,上市,股票,數位雲端,3078,True,True
 8487,8487.TW,愛爾達-創,上市,股票,數位雲端,2637,True,True
 2101,2101.TW,南港,上市,股票,橡膠工業,3608,True,True
@@ -891,7 +891,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6949,6949.TW,沛爾生醫*-創,上市,股票,生技醫療,629,True,True
 6955,6955.TW,邦睿生技-創,上市,股票,生技醫療,779,True,True
 7799,7799.TW,禾榮科,上市,股票,生技醫療,256,True,True
-7803,7803.TW,雲象科技-創,上市,股票,生技醫療,95,True,False
+7803,7803.TW,雲象科技-創,上市,股票,生技醫療,96,True,False
 7827,7827.TW,漢康-KY創,上市,股票,生技醫療,315,True,True
 1402,1402.TW,遠東新,上市,股票,紡織纖維,3608,True,True
 1409,1409.TW,新纖,上市,股票,紡織纖維,3608,True,True
@@ -1423,7 +1423,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6831,6831.TW,邁科,上市,股票,電腦及週邊設備,1255,True,True
 6928,6928.TW,攸泰科技,上市,股票,電腦及週邊設備,831,True,True
 6933,6933.TW,AMAX-KY,上市,股票,電腦及週邊設備,707,True,True
-7711,7711.TW,永擎,上市,股票,電腦及週邊設備,208,True,False
+7711,7711.TW,永擎,上市,股票,電腦及週邊設備,206,True,False
 8114,8114.TW,振樺電,上市,股票,電腦及週邊設備,3608,True,True
 8163,8163.TW,達方,上市,股票,電腦及週邊設備,3608,True,True
 8210,8210.TW,勤誠,上市,股票,電腦及週邊設備,3608,True,True
@@ -1451,7 +1451,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 1702,1702.TW,南僑,上市,股票,食品工業,3608,True,True
 1737,1737.TW,臺鹽,上市,股票,食品工業,3608,True,True
 7780,7780.TW,大研生醫*,上市,股票,食品工業,473,True,True
-7791,7791.TW,皇家可口,上市,股票,食品工業,227,True,False
+7791,7791.TW,皇家可口,上市,股票,食品工業,223,True,False
 3066,3066.TWO,李洲,上櫃,股票,光電業,3608,True,True
 3128,3128.TWO,昇銳,上櫃,股票,光電業,3608,True,True
 3230,3230.TWO,錦明,上櫃,股票,光電業,3608,True,True
@@ -1470,7 +1470,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 3630,3630.TWO,新鉅科,上櫃,股票,光電業,3608,True,True
 3666,3666.TWO,光耀,上櫃,股票,光電業,3497,True,True
 3691,3691.TWO,碩禾,上櫃,股票,光電業,3608,True,True
-3718,3718.TWO,中光電投控,上櫃,股票,光電業,21,True,False
+3718,3718.TWO,中光電投控,上櫃,股票,光電業,24,True,False
 4729,4729.TWO,熒茂,上櫃,股票,光電業,3608,True,True
 4933,4933.TWO,友輝,上櫃,股票,光電業,3608,True,True
 4972,4972.TWO,湯石照明,上櫃,股票,光電業,3497,True,True
@@ -1691,7 +1691,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6823,6823.TWO,濾能,上櫃,股票,半導體業,1295,True,True
 6829,6829.TWO,千附精密,上櫃,股票,半導體業,1222,True,True
 6895,6895.TWO,宏碩系統,上櫃,股票,半導體業,985,True,True
-6907,6907.TWO,雅特力-KY,上櫃,股票,半導體業,155,True,False
+6907,6907.TWO,雅特力-KY,上櫃,股票,半導體業,154,True,False
 6953,6953.TWO,家碩,上櫃,股票,半導體業,800,True,True
 6996,6996.TWO,力領科技,上櫃,股票,半導體業,676,True,True
 7556,7556.TWO,意德士科技,上櫃,股票,半導體業,1675,True,True
@@ -1703,7 +1703,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 7772,7772.TWO,耀穎,上櫃,股票,半導體業,315,True,True
 7810,7810.TWO,捷創科技,上櫃,股票,半導體業,407,True,True
 7828,7828.TWO,創新服務,上櫃,股票,半導體業,346,True,True
-7856,7856.TWO,漢測,上櫃,股票,半導體業,9,True,False
+7856,7856.TWO,漢測,上櫃,股票,半導體業,17,True,False
 8024,8024.TWO,佑華,上櫃,股票,半導體業,3608,True,True
 8040,8040.TWO,九暘,上櫃,股票,半導體業,3608,True,True
 8054,8054.TWO,安國,上櫃,股票,半導體業,3608,True,True
@@ -1740,7 +1740,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6728,6728.TWO,上洋,上櫃,股票,居家生活,1799,True,True
 6968,6968.TWO,萬達寵物,上櫃,股票,居家生活,747,True,True
 7782,7782.TWO,光速火箭,上櫃,股票,居家生活,476,True,True
-7794,7794.TWO,宏碁智新,上櫃,股票,居家生活,54,True,False
+7794,7794.TWO,宏碁智新,上櫃,股票,居家生活,56,True,False
 8066,8066.TWO,來思達,上櫃,股票,居家生活,3608,True,True
 8433,8433.TWO,弘帆,上櫃,股票,居家生活,3488,True,True
 8941,8941.TWO,關中,上櫃,股票,居家生活,3608,True,True
@@ -2075,7 +2075,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6546,6546.TWO,正基,上櫃,股票,通信網路業,2730,True,True
 6561,6561.TWO,是方,上櫃,股票,通信網路業,2259,True,True
 6588,6588.TWO,東典光電,上櫃,股票,通信網路業,2462,True,True
-7717,7717.TWO,萊德光電-KY,上櫃,股票,通信網路業,210,True,False
+7717,7717.TWO,萊德光電-KY,上櫃,股票,通信網路業,206,True,False
 8034,8034.TWO,榮群,上櫃,股票,通信網路業,3608,True,True
 8048,8048.TWO,德勝,上櫃,股票,通信網路業,3608,True,True
 8059,8059.TWO,凱碩,上櫃,股票,通信網路業,3608,True,True
@@ -2279,7 +2279,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 6125,6125.TWO,廣運,上櫃,股票,電機機械,3608,True,True
 6425,6425.TWO,易發,上櫃,股票,電機機械,3215,True,True
 6603,6603.TWO,富強鑫,上櫃,股票,電機機械,3608,True,True
-6604,6604.TWO,儒億,上櫃,股票,電機機械,231,True,False
+6604,6604.TWO,儒億,上櫃,股票,電機機械,232,True,False
 6609,6609.TWO,瀧澤科,上櫃,股票,電機機械,3608,True,True
 6843,6843.TWO,進典,上櫃,股票,電機機械,1137,True,True
 6982,6982.TWO,大井泵浦,上櫃,股票,電機機械,730,True,True
