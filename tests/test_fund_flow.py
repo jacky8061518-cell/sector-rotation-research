@@ -2,10 +2,129 @@ import numpy as np
 import pandas as pd
 
 from sector_rotation.fund_flow import (
+    backtest_institutional_first_buy_events,
     calculate_daily_group_flows,
     calculate_fund_flow_signals,
     detect_new_institutional_buyers,
 )
+
+
+def test_backtests_first_trust_buy_from_next_session_without_lookahead():
+    dates = pd.bdate_range("2021-01-01", periods=320)
+    prices = pd.DataFrame(
+        {
+            "1111.TW": np.linspace(100, 200, len(dates)),
+            "0050.TW": np.linspace(100, 125, len(dates)),
+        },
+        index=dates,
+    )
+    trust = np.zeros(len(dates))
+    trust[25] = 10_000
+    flows = pd.DataFrame(
+        {
+            "Date": dates,
+            "Ticker": "1111.TW",
+            "Name": "測試股",
+            "Market": "上市",
+            "Foreign net shares": 0,
+            "Trust net shares": trust,
+            "Dealer net shares": 0,
+        }
+    )
+
+    events, summary = backtest_institutional_first_buy_events(
+        prices,
+        flows,
+        investor="投信",
+        lookback_sessions=20,
+        minimum_latest_net_shares=1000,
+        years=5,
+        eligible_tickers={"1111.TW"},
+    )
+
+    assert len(events) == 1
+    assert events.iloc[0]["Signal date"] == dates[25]
+    assert events.iloc[0]["Entry date"] == dates[26]
+    expected = prices.loc[dates[47], "1111.TW"] / prices.loc[dates[26], "1111.TW"] - 1
+    assert np.isclose(events.iloc[0]["1個月報酬"], expected)
+    assert summary.loc[summary["持有期間"] == "1個月", "勝率"].iloc[0] == 1.0
+
+
+def test_first_buy_backtest_excludes_repeat_positive_buy_days():
+    dates = pd.bdate_range("2024-01-01", periods=80)
+    prices = pd.DataFrame(
+        {"1111.TW": np.linspace(100, 110, len(dates)), "0050.TW": 100.0},
+        index=dates,
+    )
+    trust = np.zeros(len(dates))
+    trust[25:28] = 1000
+    flows = pd.DataFrame(
+        {
+            "Date": dates, "Ticker": "1111.TW", "Name": "測試股", "Market": "上市",
+            "Foreign net shares": 0, "Trust net shares": trust, "Dealer net shares": 0,
+        }
+    )
+    events, _ = backtest_institutional_first_buy_events(
+        prices, flows, lookback_sessions=20, years=5
+    )
+    assert events["Signal date"].tolist() == [dates[25]]
+
+
+def test_full_history_first_buy_only_accepts_first_positive_day_after_enough_history():
+    dates = pd.bdate_range("2021-01-01", periods=320)
+    prices = pd.DataFrame(
+        {"1111.TW": np.linspace(100, 140, len(dates)), "0050.TW": 100.0},
+        index=dates,
+    )
+    trust = np.zeros(len(dates))
+    trust[260] = 5000
+    trust[280] = 8000
+    flows = pd.DataFrame(
+        {
+            "Date": dates, "Ticker": "1111.TW", "Name": "歷史首買", "Market": "上市",
+            "Foreign net shares": 0, "Trust net shares": trust, "Dealer net shares": 0,
+        }
+    )
+
+    events, _ = backtest_institutional_first_buy_events(
+        prices,
+        flows,
+        investor="投信",
+        full_history_no_prior_buying=True,
+        minimum_history_sessions=252,
+        minimum_latest_net_shares=1000,
+        years=5,
+    )
+
+    assert events["Signal date"].tolist() == [dates[260]]
+
+
+def test_full_history_screener_rejects_stock_with_any_earlier_positive_buy():
+    dates = pd.bdate_range("2024-01-01", periods=65)
+    rows = []
+    for ticker in ("1111.TW", "2222.TW"):
+        for session in dates:
+            rows.append(
+                {
+                    "Date": session, "Ticker": ticker, "Name": ticker, "Market": "上市",
+                    "Foreign net shares": 0, "Trust net shares": 0, "Dealer net shares": 0,
+                }
+            )
+    flows = pd.DataFrame(rows)
+    flows.loc[(flows["Ticker"] == "1111.TW") & (flows["Date"] == dates[-1]), "Trust net shares"] = 5000
+    flows.loc[(flows["Ticker"] == "2222.TW") & (flows["Date"] == dates[20]), "Trust net shares"] = 10
+    flows.loc[(flows["Ticker"] == "2222.TW") & (flows["Date"] == dates[-1]), "Trust net shares"] = 5000
+
+    result = detect_new_institutional_buyers(
+        flows,
+        investors=("投信",),
+        minimum_latest_net_shares=1000,
+        full_history_no_prior_buying=True,
+        minimum_history_sessions=60,
+    )
+
+    assert result["Ticker"].tolist() == ["1111.TW"]
+    assert result.iloc[0]["History sessions"] == 64
 
 
 def test_detects_first_institutional_buy_after_quiet_window():

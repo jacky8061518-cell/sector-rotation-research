@@ -27,6 +27,8 @@ def detect_new_institutional_buyers(
     investors: tuple[str, ...] = ("外資", "投信", "自營商"),
     minimum_latest_net_shares: float = 0.0,
     strict_no_prior_buying: bool = True,
+    full_history_no_prior_buying: bool = False,
+    minimum_history_sessions: int = 0,
 ) -> pd.DataFrame:
     """Find stocks where at least one selected investor has just turned net buyer.
 
@@ -65,10 +67,37 @@ def detect_new_institutional_buyers(
     if latest.empty or prior.empty:
         return pd.DataFrame(columns=output_columns)
 
+    full_history_stats: pd.DataFrame | None = None
+    if full_history_no_prior_buying:
+        full_prior = frame[frame["Date"] < latest_date]
+        source_columns = [INSTITUTIONAL_INVESTOR_COLUMNS[name] for name in investors]
+        full_history_stats = full_prior.groupby("Ticker").agg(
+            **{"History sessions": ("Date", "nunique")},
+            **{
+                f"{column} sum": (column, "sum")
+                for column in source_columns
+            },
+            **{
+                f"{column} max": (column, "max")
+                for column in source_columns
+            },
+        )
+
     rows: list[dict[str, object]] = []
     for ticker, latest_rows in latest.groupby("Ticker", sort=False):
         ticker_prior = prior[prior["Ticker"].eq(ticker)]
-        if ticker_prior["Date"].nunique() < lookback_sessions:
+        required_history = (
+            max(1, minimum_history_sessions)
+            if full_history_no_prior_buying
+            else lookback_sessions
+        )
+        if full_history_no_prior_buying:
+            if full_history_stats is None or ticker not in full_history_stats.index:
+                continue
+            history_sessions = int(full_history_stats.at[ticker, "History sessions"])
+        else:
+            history_sessions = ticker_prior["Date"].nunique()
+        if history_sessions < required_history:
             continue
         current = latest_rows.iloc[-1]
         row: dict[str, object] = {
@@ -76,7 +105,7 @@ def detect_new_institutional_buyers(
             "Ticker": ticker,
             "Name": current.get("Name", ticker),
             "Market": current.get("Market", ""),
-            "History sessions": lookback_sessions,
+            "History sessions": history_sessions,
         }
         triggered: list[str] = []
         latest_total = 0.0
@@ -84,9 +113,15 @@ def detect_new_institutional_buyers(
         for investor in investors:
             source_column = INSTITUTIONAL_INVESTOR_COLUMNS[investor]
             latest_value = float(pd.to_numeric(current.get(source_column, 0.0), errors="coerce") or 0.0)
-            history = pd.to_numeric(ticker_prior[source_column], errors="coerce").fillna(0.0)
-            prior_value = float(history.sum())
-            no_prior_buying = bool((history <= 0).all()) if strict_no_prior_buying else prior_value <= 0
+            if full_history_no_prior_buying:
+                prior_value = float(full_history_stats.at[ticker, f"{source_column} sum"])
+                no_prior_buying = bool(
+                    full_history_stats.at[ticker, f"{source_column} max"] <= 0
+                )
+            else:
+                history = pd.to_numeric(ticker_prior[source_column], errors="coerce").fillna(0.0)
+                prior_value = float(history.sum())
+                no_prior_buying = bool((history <= 0).all()) if strict_no_prior_buying else prior_value <= 0
             is_triggered = latest_value > minimum_latest_net_shares and no_prior_buying
             row[f"{investor} triggered"] = is_triggered
             row[f"{investor} latest net shares"] = latest_value
@@ -108,6 +143,184 @@ def detect_new_institutional_buyers(
         .sort_values("Triggered latest net shares", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def backtest_institutional_first_buy_events(
+    prices: pd.DataFrame,
+    flows: pd.DataFrame,
+    *,
+    investor: str = "投信",
+    lookback_sessions: int = 20,
+    minimum_latest_net_shares: float = 0.0,
+    strict_no_prior_buying: bool = False,
+    full_history_no_prior_buying: bool = False,
+    minimum_history_sessions: int = 0,
+    years: int = 5,
+    benchmark: str = "0050.TW",
+    eligible_tickers: set[str] | None = None,
+    horizons: dict[str, int] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Backtest first-buy events with next-session entry and forward returns.
+
+    A signal requires the selected institution to be a net buyer today, not a
+    net buyer on the immediately preceding session, and either have a
+    non-positive cumulative flow in the preceding window (default) or no
+    positive daily flow at all in that window (strict mode).  Entry is the next
+    available trading-session close to avoid using a signal before publication.
+    """
+    horizons = horizons or {"1個月": 21, "3個月": 63, "6個月": 126, "12個月": 252}
+    event_columns = [
+        "Signal date", "Entry date", "Ticker", "Name", "Market",
+        "Investor", "Signal net shares", "Prior net shares",
+    ]
+    summary_columns = [
+        "持有期間", "可評估訊號數", "平均報酬", "中位數報酬", "勝率",
+        "0050平均報酬", "平均超額報酬", "勝過0050比率",
+    ]
+    if prices.empty or flows.empty or investor not in INSTITUTIONAL_INVESTOR_COLUMNS:
+        return pd.DataFrame(columns=event_columns), pd.DataFrame(columns=summary_columns)
+    if lookback_sessions < 1 or years < 1:
+        return pd.DataFrame(columns=event_columns), pd.DataFrame(columns=summary_columns)
+
+    source_column = INSTITUTIONAL_INVESTOR_COLUMNS[investor]
+    frame = flows.copy()
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce").dt.normalize()
+    frame[source_column] = pd.to_numeric(frame[source_column], errors="coerce").fillna(0.0)
+    frame = frame.dropna(subset=["Date", "Ticker"]).sort_values(["Ticker", "Date"])
+    if eligible_tickers is not None:
+        frame = frame[frame["Ticker"].isin(eligible_tickers)]
+    cutoff = pd.Timestamp(prices.index.max()).normalize() - pd.DateOffset(years=years)
+    # Keep enough observations before the evaluation window to form the first signal.
+    calculation_cutoff = cutoff - pd.Timedelta(
+        max(90, lookback_sessions * 3),
+        unit="D",
+    )
+    if not full_history_no_prior_buying:
+        frame = frame[frame["Date"] >= calculation_cutoff].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=event_columns), pd.DataFrame(columns=summary_columns)
+
+    grouped = frame.groupby("Ticker", sort=False)[source_column]
+    frame["Previous net shares"] = grouped.shift(1)
+    if full_history_no_prior_buying:
+        required_history = max(1, minimum_history_sessions)
+        frame["Prior history sessions"] = frame.groupby("Ticker", sort=False).cumcount()
+        frame["Prior net shares"] = grouped.transform(
+            lambda values: values.shift(1).expanding(min_periods=1).sum()
+        )
+        frame["Prior maximum net shares"] = grouped.transform(
+            lambda values: values.shift(1).expanding(min_periods=1).max()
+        )
+        prior_condition = (
+            (frame["Prior history sessions"] >= required_history)
+            & (frame["Prior maximum net shares"] <= 0)
+        )
+    else:
+        frame["Prior net shares"] = grouped.transform(
+            lambda values: values.shift(1).rolling(
+                lookback_sessions,
+                min_periods=lookback_sessions,
+            ).sum()
+        )
+    if strict_no_prior_buying and not full_history_no_prior_buying:
+        frame["Prior maximum net shares"] = grouped.transform(
+            lambda values: values.shift(1).rolling(
+                lookback_sessions,
+                min_periods=lookback_sessions,
+            ).max()
+        )
+        prior_condition = frame["Prior maximum net shares"] <= 0
+    elif not full_history_no_prior_buying:
+        prior_condition = frame["Prior net shares"] <= 0
+    signal_mask = (
+        (frame["Date"] >= cutoff)
+        & (frame[source_column] > minimum_latest_net_shares)
+        & (frame["Previous net shares"] <= 0)
+        & prior_condition
+    )
+    events = frame.loc[
+        signal_mask,
+        ["Date", "Ticker", "Name", "Market", source_column, "Prior net shares"],
+    ].rename(
+        columns={
+            "Date": "Signal date",
+            source_column: "Signal net shares",
+        }
+    )
+    if events.empty:
+        return pd.DataFrame(columns=event_columns), pd.DataFrame(columns=summary_columns)
+
+    price_frame = prices.copy().sort_index().ffill()
+    price_frame.index = pd.to_datetime(price_frame.index).normalize()
+    benchmark_prices = price_frame[benchmark] if benchmark in price_frame else pd.Series(dtype=float)
+    price_dates = price_frame.index
+    event_parts: list[pd.DataFrame] = []
+    for ticker, ticker_events in events.groupby("Ticker", sort=False):
+        if ticker not in price_frame:
+            continue
+        part = ticker_events.copy()
+        signal_positions = price_dates.get_indexer(pd.to_datetime(part["Signal date"]))
+        entry_positions = signal_positions + 1
+        valid_entry = (signal_positions >= 0) & (entry_positions < len(price_dates))
+        part = part.loc[valid_entry].copy()
+        entry_positions = entry_positions[valid_entry]
+        if part.empty:
+            continue
+        part["Entry date"] = price_dates.take(entry_positions).to_numpy()
+        ticker_values = pd.to_numeric(price_frame[ticker], errors="coerce").to_numpy()
+        entry_values = ticker_values[entry_positions]
+        benchmark_entry = (
+            pd.to_numeric(benchmark_prices, errors="coerce").to_numpy()[entry_positions]
+            if not benchmark_prices.empty else np.full(len(part), np.nan)
+        )
+        for label, sessions in horizons.items():
+            target_positions = entry_positions + sessions
+            valid_target = target_positions < len(price_dates)
+            forward = np.full(len(part), np.nan)
+            benchmark_forward = np.full(len(part), np.nan)
+            forward[valid_target] = (
+                ticker_values[target_positions[valid_target]] / entry_values[valid_target] - 1
+            )
+            if not benchmark_prices.empty:
+                benchmark_values = pd.to_numeric(benchmark_prices, errors="coerce").to_numpy()
+                benchmark_forward[valid_target] = (
+                    benchmark_values[target_positions[valid_target]]
+                    / benchmark_entry[valid_target]
+                    - 1
+                )
+            part[f"{label}報酬"] = forward
+            part[f"{label}0050報酬"] = benchmark_forward
+            part[f"{label}超額報酬"] = forward - benchmark_forward
+        event_parts.append(part)
+
+    if not event_parts:
+        return pd.DataFrame(columns=event_columns), pd.DataFrame(columns=summary_columns)
+    event_results = pd.concat(event_parts, ignore_index=True)
+    event_results["Investor"] = investor
+    event_results = event_results.sort_values(
+        ["Signal date", "Signal net shares"],
+        ascending=[False, False],
+    ).reset_index(drop=True)
+
+    summaries: list[dict[str, object]] = []
+    for label in horizons:
+        returns = pd.to_numeric(event_results[f"{label}報酬"], errors="coerce")
+        benchmark_returns = pd.to_numeric(event_results[f"{label}0050報酬"], errors="coerce")
+        valid = returns.notna()
+        excess = returns - benchmark_returns
+        summaries.append(
+            {
+                "持有期間": label,
+                "可評估訊號數": int(valid.sum()),
+                "平均報酬": returns[valid].mean(),
+                "中位數報酬": returns[valid].median(),
+                "勝率": (returns[valid] > 0).mean(),
+                "0050平均報酬": benchmark_returns[valid].mean(),
+                "平均超額報酬": excess[valid].mean(),
+                "勝過0050比率": (excess[valid] > 0).mean(),
+            }
+        )
+    return event_results, pd.DataFrame(summaries, columns=summary_columns)
 
 
 TWSE_INSTITUTIONAL_URL = "https://www.twse.com.tw/rwd/zh/fund/T86"
