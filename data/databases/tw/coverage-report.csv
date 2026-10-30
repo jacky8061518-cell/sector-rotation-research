@@ -117,7 +117,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00708L,00708L.TW,期元大S&amp;P黃金正2(原名：元大S&amp;P黃金正2),上市,ETF,商品／期貨 ETF,2232,True,True
 00738U,00738U.TW,期元大道瓊白銀(原名：元大道瓊白銀),上市,ETF,商品／期貨 ETF,2020,True,True
 00763U,00763U.TW,期街口道瓊銅,上市,ETF,商品／期貨 ETF,1908,True,True
-009832,009832.TW,兆豐美國黃金,上市,ETF,商品／期貨 ETF,2,True,False
+009832,009832.TW,兆豐美國黃金,上市,ETF,商品／期貨 ETF,4,True,False
 00631L,00631L.TW,元大台灣50正2,上市,ETF,槓桿／反向 ETF,2924,True,True
 00632R,00632R.TW,元大台灣50反1,上市,ETF,槓桿／反向 ETF,2924,True,True
 00633L,00633L.TW,富邦上証正2,上市,ETF,槓桿／反向 ETF,2919,True,True
@@ -242,7 +242,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 009828,009828.TW,中信台日韓PCB,上市,ETF,海外股票 ETF,44,True,False
 009829,009829.TW,大華韓國KOSPI 50,上市,ETF,海外股票 ETF,44,True,False
 00982T,00982T.TW,平衡兆豐台美動能,上市,ETF,海外股票 ETF,198,True,False
-009831,009831.TW,FT核心AI電力算力,上市,ETF,海外股票 ETF,2,True,False
+009831,009831.TW,FT核心AI電力算力,上市,ETF,海外股票 ETF,4,True,False
 00411A,00411A.TWO,主動統一前沿科技,上櫃,ETF,主動式 ETF,52,True,False
 00980D,00980D.TWO,主動聯博投等入息,上櫃,ETF,主動式 ETF,304,True,True
 00985D,00985D.TWO,主動貝萊德優投等,上櫃,ETF,主動式 ETF,138,True,False
