@@ -15,7 +15,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 00415A,00415A.TW,主動群益核心50,上市,ETF,主動式 ETF,34,True,False
 00416A,00416A.TW,主動台新臺灣中小,上市,ETF,主動式 ETF,15,True,False
 00418A,00418A.TW,主動復華台灣新星,上市,ETF,主動式 ETF,11,True,False
-00420A,00420A.TW,主動野村亞洲科技,上市,ETF,主動式 ETF,4,True,False
+00420A,00420A.TW,主動野村亞洲科技,上市,ETF,主動式 ETF,1,True,False
 00980A,00980A.TW,主動野村臺灣優選,上市,ETF,主動式 ETF,379,True,True
 00981A,00981A.TW,主動統一台股增長,上市,ETF,主動式 ETF,349,True,True
 00982A,00982A.TW,主動群益台灣強棒,上市,ETF,主動式 ETF,372,True,True
@@ -247,7 +247,7 @@ Code,Yahoo ticker,Name,Market,Asset type,Industry,Price observations,In price da
 009829,009829.TW,大華韓國KOSPI 50,上市,ETF,海外股票 ETF,60,True,False
 00982T,00982T.TW,平衡兆豐台美動能,上市,ETF,海外股票 ETF,210,True,False
 009831,009831.TW,FT核心AI電力算力,上市,ETF,海外股票 ETF,17,True,False
-009833,009833.TW,野村韓國科技30,上市,ETF,海外股票 ETF,4,True,False
+009833,009833.TW,野村韓國科技30,上市,ETF,海外股票 ETF,1,True,False
 00411A,00411A.TWO,主動統一前沿科技,上櫃,ETF,主動式 ETF,66,True,False
 00980D,00980D.TWO,主動聯博投等入息,上櫃,ETF,主動式 ETF,319,True,True
 00985D,00985D.TWO,主動貝萊德優投等,上櫃,ETF,主動式 ETF,153,True,False
